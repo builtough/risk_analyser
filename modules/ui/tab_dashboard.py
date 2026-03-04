@@ -5,7 +5,7 @@ import pandas as pd
 from modules.visualizer import (plot_keyword_frequency, plot_risk_distribution,
                                  plot_category_breakdown, plot_keyword_heatmap,
                                  plot_document_stats)
-from modules.ui.helpers import clean, metric_card
+from modules.ui.helpers import clean, clean_finding, metric_card
 
 
 def render_tab_dashboard():
@@ -70,9 +70,9 @@ def render_tab_dashboard():
                 "Category":         clean(f.get("category_label","")),
                 "Document":         f.get("filename",""),
                 "Lines":            f"{f.get('start_line','?')}–{f.get('end_line','?')}",
-                "Finding":          clean(f.get("finding",""))[:120],
-                "Flagged Language": clean(f.get("problematic_language",""))[:100],
-                "Interpretation":   clean(f.get("interpretation",""))[:150],
+                "Finding":          clean_finding(f.get("finding",""))[:120],
+                "Flagged Language": clean_finding(f.get("problematic_language",""))[:100],
+                "Interpretation":   clean_finding(f.get("interpretation",""))[:150],
             } for f in st.session_state.findings])
             st.dataframe(df, use_container_width=True, hide_index=True,
                          height=min(700, (len(df)+1)*38+50))

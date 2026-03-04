@@ -14,7 +14,7 @@ from modules.analyzer import (
     keyword_scan_chunk, score_findings,
     merge_categories, make_custom_category, custom_category_key,
 )
-from modules.ui.helpers import clean, badge, metric_card
+from modules.ui.helpers import clean, clean_finding, badge, metric_card
 
 # ── Quick-filter group definitions ──────────────────────────────────────────
 _BUILTIN_GROUPS = {
@@ -421,44 +421,61 @@ def _render_findings_with_filters():
 
 # ── Finding card ─────────────────────────────────────────────────────────────
 
+
+
 def _render_finding_card(finding: dict):
     risk   = finding.get("risk_level", "LOW")
-    cat    = clean(finding.get("category_label", ""))
-    fname  = html_escape(finding.get("filename", ""))
+    cat    = clean_finding(finding.get("category_label", ""))
+    fname  = finding.get("filename", "")
     sl, el = finding.get("start_line", "?"), finding.get("end_line", "?")
-    txt    = clean(finding.get("finding", ""))
-    prob   = clean(finding.get("problematic_language", ""))
-    interp = clean(finding.get("interpretation", ""))
-    qs     = [clean(q) for q in finding.get("follow_up_questions", []) if q]
+    txt    = clean_finding(finding.get("finding", ""))
+    prob   = clean_finding(finding.get("problematic_language", ""))
+    interp = clean_finding(finding.get("interpretation", ""))
+    qs     = [clean_finding(q) for q in finding.get("follow_up_questions", []) if q]
+    is_custom = finding.get("is_custom", False)
 
-    # Custom badge tag for custom categories
-    custom_tag = (
-        '<span style="font-size:10px;background:rgba(99,102,241,.1);color:#6366F1;'
-        'border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:1px 7px;'
-        'font-weight:600;">CUSTOM</span>'
-        if finding.get("is_custom") else ""
-    )
+    color = {"HIGH": "#EF4444", "MEDIUM": "#F59E0B", "LOW": "#22C55E"}.get(risk, "#94A3B8")
 
-    quote_html = (
-        f'<div class="fc-quote">{html_escape(prob)}</div>'
-        if prob and prob.upper() not in ("N/A", "") else ""
-    )
-    qs_html = ""
-    if qs:
-        items  = "".join(f'<div class="fc-qi">{html_escape(q)}</div>' for q in qs)
-        qs_html = f'<div class="fc-qlbl">Legal Team Follow-up Questions</div>{items}'
+    # ── Card container ───────────────────────────────────────────────────────
+    with st.container():
+        st.markdown(
+            f'<div style="border-left:4px solid {color};padding:14px 16px;'
+            f'margin-bottom:12px;border-radius:0 8px 8px 0;'
+            f'background:rgba(0,0,0,.02);">',
+            unsafe_allow_html=True,
+        )
 
-    st.markdown(f"""
-    <div class="fc fc-{risk}">
-      <div class="fc-hdr">
-        {badge(risk)}
-        <span class="fc-cat">{html_escape(cat)}</span>
-        {custom_tag}
-        <span class="fc-src">{fname}</span>
-        <span class="fc-ln">Lines {sl}–{el}</span>
-      </div>
-      <div class="fc-find">{html_escape(txt)}</div>
-      {quote_html}
-      <div class="fc-interp">{html_escape(interp)}</div>
-      {qs_html}
-    </div>""", unsafe_allow_html=True)
+        # Header row — pure Streamlit widgets, no custom class spans
+        h1, h2, h3, h4 = st.columns([1.2, 2.5, 2, 1])
+        with h1:
+            label = {"HIGH": "🔴 HIGH", "MEDIUM": "🟡 MEDIUM", "LOW": "🟢 LOW"}.get(risk, risk)
+            st.markdown(f"**{label}**")
+        with h2:
+            st.markdown(f"**{cat}**" + (" `CUSTOM`" if is_custom else ""))
+        with h3:
+            st.caption(f"📄 {fname}")
+        with h4:
+            st.caption(f"Lines {sl}–{el}")
+
+        st.divider()
+
+        # Finding text
+        if txt:
+            st.markdown(txt)
+
+        # Flagged language in a code block — no HTML, can never echo back
+        if prob and prob.upper() not in ("N/A", ""):
+            st.markdown("**Flagged language:**")
+            st.code(prob, language=None)
+
+        # Interpretation
+        if interp:
+            st.markdown(f"*{interp}*")
+
+        # Follow-up questions
+        if qs:
+            st.markdown("**Legal Team Follow-up Questions:**")
+            for q in qs:
+                st.markdown(f"- {q}")
+
+        st.markdown('</div>', unsafe_allow_html=True)

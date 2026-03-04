@@ -1,11 +1,46 @@
 """Shared UI helper functions used across all tab modules."""
 import re
+import html as _html_lib
 from html import escape as html_escape
 
 
 def clean(t: str) -> str:
-    """Strip HTML tags and whitespace."""
-    return re.sub(r'<[^>]+>', '', t or '').strip()
+    """Strip HTML tags (keeping inner text), decode entities, collapse whitespace."""
+    t = re.sub(r'<[^>]+>', ' ', t or '')
+    t = _html_lib.unescape(t)
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip()
+
+
+def clean_finding(t: str) -> str:
+    """
+    Sanitize a finding text field for display.
+
+    Drops ALL paired HTML tags AND their content (so filename/line text inside
+    <span class="fc-src">…</span> is never shown), then strips remaining bare
+    tags, removes filename/line-number tokens, and collapses whitespace.
+    """
+    t = t or ''
+    # 1. Nuke every <tag>...</tag> pair AND its inner content (repeat for nesting)
+    for _ in range(5):
+        prev = t
+        t = re.sub(r'<(\w+)[^>]*>.*?</\1>', '', t, flags=re.DOTALL | re.IGNORECASE)
+        if t == prev:
+            break
+    # 2. Strip any leftover self-closing or unclosed tags
+    t = re.sub(r'<[^>]+>', ' ', t)
+    # 3. Decode HTML entities  (&quot; → "  &#x27; → '  etc.)
+    t = _html_lib.unescape(t)
+    # 4. Remove markdown code fences
+    t = re.sub(r'```[\w]*\n?|~~~[\w]*\n?', '', t)
+    # 5. Remove residual filename tokens  e.g. "misleading doc.docx"
+    t = re.sub(r'\b[\w][\w \-]*\.(docx?|pdf|xlsx?|txt)\b', '', t, flags=re.IGNORECASE)
+    # 6. Remove residual line-number tokens  e.g. "Lines 24–42" "Line 5"
+    t = re.sub(r'\bLines?\s+\d+\s*[\u2013\u2014\-]+\s*\d+\b', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\bLines?\s+\d+\b', '', t, flags=re.IGNORECASE)
+    # 7. Collapse whitespace
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip()
 
 
 def highlight(text: str, keywords: list) -> str:
@@ -53,11 +88,8 @@ def empty_state(icon: str, title: str, msg: str = "") -> str:
 
 
 def build_finding_line_map(findings: list) -> dict:
-    """
-    Build a mapping of line_number -> worst_risk_level for document viewer highlighting.
-    Also stores category labels for tooltip-like display.
-    """
-    line_map: dict = {}  # line_num -> {"level": str, "labels": list}
+    """Build line_number → worst_risk_level mapping for document viewer."""
+    line_map: dict = {}
     level_rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
     for f in findings:
@@ -71,9 +103,7 @@ def build_finding_line_map(findings: list) -> dict:
             if ln not in line_map:
                 line_map[ln] = {"level": level, "labels": [label]}
             else:
-                existing_rank = level_rank.get(line_map[ln]["level"], 1)
-                new_rank = level_rank.get(level, 1)
-                if new_rank > existing_rank:
+                if level_rank.get(level, 1) > level_rank.get(line_map[ln]["level"], 1):
                     line_map[ln]["level"] = level
                 if label and label not in line_map[ln]["labels"]:
                     line_map[ln]["labels"].append(label)

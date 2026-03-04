@@ -4,7 +4,7 @@ import streamlit as st
 from datetime import datetime
 
 from modules.reporter import generate_pdf_report, generate_excel_report
-from modules.ui.helpers import clean, metric_card, badge
+from modules.ui.helpers import clean, clean_finding, metric_card, badge
 
 
 def render_tab_reports():
@@ -51,13 +51,13 @@ def render_tab_reports():
                     f"**Risk:** {risk}  \n**File:** {fname}  \n"
                     f"**Lines:** {sl}–{el}  \n**Category:** {cat}")
             with c2:
-                st.markdown(f"**Finding:**  \n{clean(f.get('finding',''))}")
-                prob = clean(f.get("problematic_language",""))
+                st.markdown(f"**Finding:**  \n{clean_finding(f.get('finding',''))}")
+                prob = clean_finding(f.get("problematic_language",""))
                 if prob and prob.upper() not in ("N/A",""):
                     st.markdown("**Flagged Language:**")
                     st.code(prob, language=None)
-                st.markdown(f"**Interpretation:**  \n{clean(f.get('interpretation',''))}")
-                qs = [clean(q) for q in f.get("follow_up_questions",[]) if q]
+                st.markdown(f"**Interpretation:**  \n{clean_finding(f.get('interpretation',''))}")
+                qs = [clean_finding(q) for q in f.get("follow_up_questions",[]) if q]
                 if qs:
                     st.markdown("**Follow-up Questions:**")
                     for q in qs:

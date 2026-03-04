@@ -9,7 +9,7 @@ Document Viewer Tab
 import streamlit as st
 from html import escape as html_escape
 
-from modules.ui.helpers import clean, highlight, metric_card, build_finding_line_map
+from modules.ui.helpers import clean, clean_finding, highlight, metric_card, build_finding_line_map
 
 
 def render_tab_viewer():
@@ -184,17 +184,17 @@ def _render_findings_panel(doc_findings: list):
         risk   = f.get("risk_level", "LOW")
         cat    = clean(f.get("category_label", ""))
         sl, el = f.get("start_line", "?"), f.get("end_line", "?")
-        txt    = clean(f.get("finding", ""))
+        txt    = clean_finding(f.get("finding", ""))
         short  = txt[:110] + ("…" if len(txt) > 110 else "")
         color  = {"HIGH": "#EF4444", "MEDIUM": "#F59E0B", "LOW": "#22C55E"}.get(risk, "#94A3B8")
 
         st.markdown(
             f'<div style="border-left:3px solid {color};padding:8px 10px;'
-            f'margin-bottom:8px;border-radius:0 6px 6px 0;background:rgba(0,0,0,.03);font-size:12px;">'
+            f'margin-bottom:8px;border-radius:0 6px 6px 0;background:rgba(0,0,0,.03);">'
             f'<div style="font-weight:600;color:{color};font-size:11px;margin-bottom:2px;">'
             f'{risk} · Lines {sl}–{el}</div>'
-            f'<div style="font-size:11px;opacity:.65;margin-bottom:3px;">{html_escape(cat)}</div>'
-            f'<div style="line-height:1.5;">{html_escape(short)}</div>'
+            f'<div style="font-size:11px;opacity:.65;margin-bottom:3px;">' + cat + '</div>'
+            f'<div style="font-size:12px;line-height:1.5;">' + short + '</div>'
             f'</div>',
             unsafe_allow_html=True,
         )

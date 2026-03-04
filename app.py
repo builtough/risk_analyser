@@ -19,6 +19,7 @@ from modules.ui.tab_query     import render_tab_query
 from modules.ui.tab_viewer    import render_tab_viewer
 from modules.ui.tab_dashboard import render_tab_dashboard
 from modules.ui.tab_reports   import render_tab_reports
+from modules.ui.tab_debug    import render_tab_debug
 
 inject_styles()
 
@@ -53,9 +54,9 @@ if st.session_state.documents:
     )
 
 (t_analysis, t_search, t_query,
- t_viewer, t_dashboard, t_reports) = st.tabs([
+ t_viewer, t_dashboard, t_reports, t_debug) = st.tabs([
     "⚖ Risk Analysis", "🔍 Document Search", "💬 LLM Query",
-    "📄 Document Viewer", "📊 Analytics", "📑 Export Reports",
+    "📄 Document Viewer", "📊 Analytics", "📑 Export Reports", "🛠 Debug",
 ])
 
 with t_analysis:  render_tab_analysis()
@@ -64,6 +65,7 @@ with t_query:     render_tab_query()
 with t_viewer:    render_tab_viewer()
 with t_dashboard: render_tab_dashboard()
 with t_reports:   render_tab_reports()
+with t_debug:     render_tab_debug()
 
 st.markdown(
     '<div class="da-footer">DealAnalyzer — Contract Intelligence · '
