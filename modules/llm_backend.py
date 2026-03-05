@@ -1,14 +1,58 @@
 """
 LLM Backend Module — four backends with unified .query() interface.
+
+Single source of truth for all backend names, model lists, and default models.
+admin.py and sidebar.py both import from here — no model list lives anywhere else.
 """
 import requests
 from typing import Dict, Any
 
+# ── Backend name constants ────────────────────────────────────────────────────
 BACKEND_OLLAMA    = "Ollama (Local)"
 BACKEND_MISTRAL   = "Mistral AI"
-BACKEND_CUSTOM    = "Custom Endpoint"
 BACKEND_ANTHROPIC = "Anthropic (Claude)"
+BACKEND_CUSTOM    = "Custom Endpoint"
 
+# Ordered list used to populate selectboxes
+BACKEND_LIST = [BACKEND_OLLAMA, BACKEND_MISTRAL, BACKEND_ANTHROPIC, BACKEND_CUSTOM]
+
+# ── Model lists per backend ───────────────────────────────────────────────────
+# Edit here to add/remove models globally — sidebar and admin panel both reflect
+# the change automatically with no other files to touch.
+BACKEND_MODELS: Dict[str, list] = {
+    BACKEND_OLLAMA: [
+        "llama3",
+        "llama3.1",
+        "llama3.2",
+        "mistral",
+        "mixtral",
+        "phi3",
+        "llama2",
+    ],
+    BACKEND_MISTRAL: [
+        "codestral-latest",
+        "mistral-large-latest",
+        "mistral-medium-latest",
+        "mistral-small-latest",
+        "codestral-latest",
+        "open-mixtral-8x22b",
+    ],
+    BACKEND_ANTHROPIC: [
+        "claude-sonnet-4-20250514",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
+        "claude-3-haiku-20240307",
+    ],
+    BACKEND_CUSTOM: [],   # free-text model ID — no fixed list
+}
+
+# ── Default model per backend (first entry is the default) ───────────────────
+# Changing the first item in BACKEND_MODELS above also changes the default.
+def default_model(backend: str) -> str:
+    models = BACKEND_MODELS.get(backend, [])
+    return models[0] if models else ""
+
+# ── System prompt ─────────────────────────────────────────────────────────────
 DEFAULT_SYSTEM_PROMPT = (
     "You are an expert legal analyst specializing in multinational deal documentation. "
     "Analyze contract clauses with precision, identify risks, and provide actionable insights. "
@@ -16,34 +60,37 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+# ── LLMBackend class ──────────────────────────────────────────────────────────
 class LLMBackend:
     def __init__(
         self,
         backend_type: str = BACKEND_OLLAMA,
-        ollama_model: str = "llama3",
+        ollama_model: str = "",
         ollama_url: str = "http://localhost:11434",
         mistral_api_key: str = "",
-        mistral_model: str = "mistral-large-latest",
+        mistral_model: str = "",
         custom_url: str = "",
         custom_api_key: str = "",
         custom_model: str = "",
         anthropic_api_key: str = "",
-        anthropic_model: str = "claude-sonnet-4-20250514",
+        anthropic_model: str = "",
         temperature: float = 0.2,
         max_tokens: int = 2048,
     ):
         self.backend_type      = backend_type
-        self.ollama_model      = ollama_model
         self.ollama_url        = ollama_url.rstrip("/")
         self.mistral_api_key   = mistral_api_key
-        self.mistral_model     = mistral_model
         self.custom_url        = custom_url
         self.custom_api_key    = custom_api_key
-        self.custom_model      = custom_model
         self.anthropic_api_key = anthropic_api_key
-        self.anthropic_model   = anthropic_model
         self.temperature       = temperature
         self.max_tokens        = max_tokens
+
+        # Fall back to default model if caller passes empty string
+        self.ollama_model    = ollama_model    or default_model(BACKEND_OLLAMA)
+        self.mistral_model   = mistral_model   or default_model(BACKEND_MISTRAL)
+        self.custom_model    = custom_model    or ""
+        self.anthropic_model = anthropic_model or default_model(BACKEND_ANTHROPIC)
 
     def query(self, prompt: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> Dict[str, Any]:
         try:
@@ -81,10 +128,11 @@ class LLMBackend:
             return {"response": "", "error": "Mistral API key not provided."}
         resp = requests.post(
             "https://codestral.mistral.ai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {self.mistral_api_key}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {self.mistral_api_key}",
+                     "Content-Type": "application/json"},
             json={"model": self.mistral_model,
                   "messages": [{"role": "system", "content": system_prompt},
-                                {"role": "user", "content": prompt}],
+                                {"role": "user",   "content": prompt}],
                   "temperature": self.temperature, "max_tokens": self.max_tokens},
             timeout=60,
         )
@@ -117,7 +165,7 @@ class LLMBackend:
             self.custom_url, headers=headers,
             json={"model": self.custom_model or "default",
                   "messages": [{"role": "system", "content": system_prompt},
-                                {"role": "user", "content": prompt}],
+                                {"role": "user",   "content": prompt}],
                   "temperature": self.temperature, "max_tokens": self.max_tokens},
             timeout=60,
         )

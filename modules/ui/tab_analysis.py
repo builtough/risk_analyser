@@ -268,6 +268,7 @@ def _run_analysis(selected_cats: list):
         (ch, {k: v for k, v in keyword_scan_chunk(ch["text"], custom).items()
                if k in selected_cats})
         for ch in st.session_state.chunks
+        if not ch.get("is_table")
     ]
     pre = [(ch, h) for ch, h in pre if h]
 
