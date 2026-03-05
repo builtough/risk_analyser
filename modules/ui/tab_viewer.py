@@ -2,8 +2,8 @@
 Document Viewer Tab
 - Full document with line numbers and risk highlights for text-based files
 - Excel: each sheet rendered as an interactive grid with table markers
-- DOCX/PPTX/PDF: tables rendered as inline grids exactly where they appear in the document,
-  with clear start/end markers
+- DOCX/PPTX/PDF: tables rendered as plain text within the line-numbered viewer
+  (no redundant interactive grids)
 """
 import io
 import streamlit as st
@@ -11,6 +11,7 @@ import pandas as pd
 from html import escape as html_escape
 
 from modules.ui.helpers import clean, clean_finding, highlight, metric_card, build_finding_line_map
+from modules.table_extractor import table_to_text   # for plain text table representation
 
 
 def render_tab_viewer():
@@ -78,9 +79,10 @@ def render_tab_viewer():
 
     # ── Route to the right renderer ───────────────────────────────────────────
     if file_ext in ("xlsx", "xls"):
+        # Excel: keep interactive grids (pure tables)
         _render_excel(rich_blocks, selected_doc)
     elif rich_blocks:
-        # Use rich renderer for any document with tables (PDF, DOCX, etc.)
+        # Mixed content (PDF, DOCX, etc.): render tables as plain text inline
         if has_findings:
             main_col, side_col = st.columns([3, 1])
         else:
@@ -95,12 +97,12 @@ def render_tab_viewer():
         )
 
         with main_col:
-            _render_rich_document(rich_blocks, sv_kw, line_map, lines)
+            _render_rich_document_plain(rich_blocks, sv_kw, line_map, lines)
         if side_col:
             with side_col:
                 _render_findings_panel(doc_findings)
     else:
-        # Fallback to plain text viewer (for documents without rich_blocks)
+        # Plain text fallback
         sv_kw = st.text_input(
             "🔍 Highlight within document",
             placeholder="e.g. indemnify, renewal…",
@@ -156,7 +158,7 @@ def render_tab_viewer():
     )
 
 
-# ── Excel renderer ────────────────────────────────────────────────────────────
+# ── Excel renderer (unchanged, interactive grids) ────────────────────────────
 
 def _render_excel(rich_blocks: list, filename: str):
     """Render each Excel sheet as a full interactive grid with table markers."""
@@ -180,7 +182,7 @@ def _render_excel(rich_blocks: list, filename: str):
 
 
 def _render_table_with_markers(df: pd.DataFrame, label: str, key_prefix: str):
-    """Display a table with start/end markers and an interactive grid."""
+    """Display a table with start/end markers and an interactive grid (Excel only)."""
     # Start marker
     st.markdown(
         f'<div style="background:rgba(59,130,246,0.1); border-left:4px solid #3B82F6; '
@@ -189,7 +191,7 @@ def _render_table_with_markers(df: pd.DataFrame, label: str, key_prefix: str):
         unsafe_allow_html=True
     )
 
-    # The table itself
+    # Interactive grid
     _render_df_grid(df, key_prefix)
 
     # End marker
@@ -234,16 +236,20 @@ def _render_df_grid(df: pd.DataFrame, key_prefix: str = ""):
     )
 
 
-# ── Rich document renderer (for PDF, DOCX, etc. with rich_blocks) ─────────────
+# ── Rich document renderer (plain text, no interactive tables) ───────────────
 
-def _render_rich_document(rich_blocks: list, sv_kw: str, line_map: dict, all_lines: list):
+def _render_rich_document_plain(rich_blocks: list, sv_kw: str, line_map: dict, all_lines: list):
     """
     Walk rich_blocks in order. Text blocks render as highlighted line viewer.
-    Table blocks render as full interactive grids with clear start/end markers.
+    Table blocks are converted to plain text and rendered inline with line numbers.
+    No interactive grids are shown – tables appear as text.
     """
     kws           = [sv_kw.strip()] if sv_kw.strip() else []
-    line_cursor   = 1   # track absolute line number across text blocks
+    line_cursor   = 1   # absolute line number across all blocks
     table_counter = 0
+
+    # We'll accumulate rendered HTML lines
+    rendered_lines = []
 
     for block in rich_blocks:
         btype = block.get("type")
@@ -251,8 +257,6 @@ def _render_rich_document(rich_blocks: list, sv_kw: str, line_map: dict, all_lin
         if btype == "text":
             text  = block.get("content", "")
             lines = text.split("\n")
-
-            rendered = []
             for line in lines:
                 safe_text = highlight(line, kws) if kws else html_escape(line)
                 line_info = line_map.get(line_cursor)
@@ -265,43 +269,56 @@ def _render_rich_document(rich_blocks: list, sv_kw: str, line_map: dict, all_lin
                     row_class  = "dv-line"
                     title_attr = ""
                 ln_html = f'<span class="dv-ln">{line_cursor}</span>'
-                rendered.append(
+                rendered_lines.append(
                     f'<span class="{row_class}"{title_attr}>{ln_html}{safe_text}</span>'
                 )
                 line_cursor += 1
-
-            if rendered:
-                st.markdown(
-                    f'<div class="doc-viewer">{"".join(rendered)}</div>',
-                    unsafe_allow_html=True,
-                )
 
         elif btype == "table":
             df    = block.get("content")
             label = block.get("label", f"Table {table_counter + 1}")
             if df is not None and not df.empty:
-                # Start marker
-                st.markdown(
-                    f'<div style="background:rgba(16,185,129,0.1); border-left:4px solid #10B981; '
-                    f'padding:6px 12px; margin:16px 0 4px; border-radius:0 4px 4px 0;">'
-                    f'📋 <strong>TABLE START</strong> · {html_escape(label)}</div>',
-                    unsafe_allow_html=True
-                )
+                # Generate plain text representation (limit rows for display)
+                table_text = table_to_text({"df": df, "source": label, "filename": ""}, max_rows=50)
 
-                # Table grid
-                _render_df_grid(df, key_prefix=f"rich_tbl_{table_counter}")
-
-                # End marker
-                st.markdown(
-                    f'<div style="background:rgba(0,0,0,0.03); border-left:4px solid #94A3B8; '
-                    f'padding:4px 12px; margin:4px 0 16px; border-radius:0 4px 4px 0; '
-                    f'font-size:11px; color:#64748B;">'
-                    f'━━━ TABLE END ━━━</div>',
-                    unsafe_allow_html=True
+                # Optional start marker (can be a simple line)
+                marker_start = f"[ TABLE START: {label} ]"
+                rendered_lines.append(
+                    f'<span class="dv-line" style="background:rgba(16,185,129,0.1); border-left:4px solid #10B981; padding-left:4px;">'
+                    f'<span class="dv-ln">{line_cursor}</span>{html_escape(marker_start)}</span>'
                 )
+                line_cursor += 1
+
+                # Split table text into lines and render each with line number
+                table_lines = table_text.split("\n")
+                for tline in table_lines:
+                    # Apply highlighting if keywords match
+                    safe_tline = highlight(tline, kws) if kws else html_escape(tline)
+                    # No risk highlighting inside tables (line_map not applicable)
+                    rendered_lines.append(
+                        f'<span class="dv-line">'
+                        f'<span class="dv-ln">{line_cursor}</span>{safe_tline}</span>'
+                    )
+                    line_cursor += 1
+
+                # Optional end marker
+                marker_end = "[ TABLE END ]"
+                rendered_lines.append(
+                    f'<span class="dv-line" style="background:rgba(0,0,0,0.03); border-left:4px solid #94A3B8; padding-left:4px;">'
+                    f'<span class="dv-ln">{line_cursor}</span>{html_escape(marker_end)}</span>'
+                )
+                line_cursor += 1
+
                 table_counter += 1
 
-    # Legend for risk highlights (if any)
+    # Render all accumulated lines
+    if rendered_lines:
+        st.markdown(
+            f'<div class="doc-viewer">{"".join(rendered_lines)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Legend for risk highlights
     if line_map:
         st.markdown(
             '**Legend:** '
@@ -315,7 +332,7 @@ def _render_rich_document(rich_blocks: list, sv_kw: str, line_map: dict, all_lin
         )
 
 
-# ── Standard text viewer (fallback) ───────────────────────────────────────────
+# ── Standard text viewer (unchanged) ─────────────────────────────────────────
 
 def _render_full_document(lines: list, sv_kw: str, line_map: dict):
     kws           = [sv_kw.strip()] if sv_kw.strip() else []
@@ -359,7 +376,7 @@ def _render_full_document(lines: list, sv_kw: str, line_map: dict):
         )
 
 
-# ── Findings side panel ───────────────────────────────────────────────────────
+# ── Findings side panel (unchanged) ──────────────────────────────────────────
 
 def _render_findings_panel(doc_findings: list):
     st.markdown("**Findings**")
