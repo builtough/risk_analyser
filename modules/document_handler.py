@@ -1,7 +1,7 @@
 """
 Document Handler Module
 Handles loading and extracting text from PDF, Word (.docx), and Excel files.
-Produces rich_blocks for DOCX and Excel so the viewer can render tables as grids
+Produces rich_blocks for PDF, DOCX, and Excel so the viewer can render tables as grids
 inline with text content, rather than flattening everything to line-by-line text.
 """
 
@@ -16,6 +16,12 @@ except ImportError:
     PDF_AVAILABLE = False
 
 try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
+
+try:
     from docx import Document as DocxDocument
     from docx.oxml.ns import qn
     DOCX_AVAILABLE = True
@@ -27,6 +33,9 @@ try:
     XLSX_AVAILABLE = True
 except ImportError:
     XLSX_AVAILABLE = False
+
+# Import helpers from table_extractor to reuse header promotion and fake table detection
+from modules.table_extractor import _promote_header, _is_fake_table
 
 
 def load_document(uploaded_file) -> Dict[str, Any]:
@@ -66,17 +75,69 @@ def _load_pdf(file_bytes: bytes) -> Dict[str, Any]:
         return {"error": "PyPDF2 not installed. Run: pip install PyPDF2"}
 
     reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-    pages, raw_parts = [], []
+    pages, raw_parts, rich_blocks = [], [], []
+    page_counter = 0
+
+    # Use pdfplumber if available for table extraction
+    pdf_plumber = None
+    if PDFPLUMBER_AVAILABLE:
+        pdf_plumber = pdfplumber.open(io.BytesIO(file_bytes))
+
     for i, page in enumerate(reader.pages):
+        # Extract text via PyPDF2
         text = page.extract_text() or ""
         pages.append({"page_number": i + 1, "text": text.strip()})
         raw_parts.append(text)
+
+        # Text block for this page
+        rich_blocks.append({
+            "type": "text",
+            "content": text,
+            "label": f"Page {i + 1}",
+            "page": i + 1,
+        })
+
+        # Extract tables with pdfplumber if available
+        if pdf_plumber:
+            plumber_page = pdf_plumber.pages[i]
+            # Try both lattice and stream strategies
+            tables = plumber_page.extract_tables({
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+            }) or plumber_page.extract_tables({
+                "vertical_strategy": "text",
+                "horizontal_strategy": "text",
+            })
+
+            for t_idx, table_data in enumerate(tables):
+                if not table_data:
+                    continue
+                # Convert to DataFrame
+                df = pd.DataFrame(table_data)
+                # Basic cleaning: drop empty rows/columns
+                df = df.replace("", pd.NA).dropna(how="all").dropna(axis=1, how="all").fillna("")
+                if df.empty or df.shape[0] < 2 or df.shape[1] < 2:
+                    continue
+                # Promote header if first row looks like headers
+                df = _promote_header(df)
+                if _is_fake_table(df):
+                    continue
+                rich_blocks.append({
+                    "type": "table",
+                    "content": df,
+                    "label": f"Page {i + 1}, Table {t_idx + 1}",
+                    "page": i + 1,
+                    "source": f"Page {i + 1}",
+                })
+
+    if pdf_plumber:
+        pdf_plumber.close()
 
     full_text = "\n\n".join(raw_parts)
     return {
         "raw_text":    full_text,
         "pages":       pages,
-        "rich_blocks": [{"type": "text", "content": full_text, "label": "Full text"}],
+        "rich_blocks": rich_blocks,
         "metadata":    {"page_count": len(reader.pages)},
     }
 

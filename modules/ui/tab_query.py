@@ -5,8 +5,10 @@ from datetime import datetime
 
 from modules.llm_backend import LLMBackend
 from modules.search import build_query_prompt, simple_relevance_search
+from modules.search import bm25_search
 
-EXAMPLES = [
+# Fallback examples if generation fails or no LLM is configured
+FALLBACK_EXAMPLES = [
     "What are the termination rights of each party?",
     "Are there any automatic renewal or evergreen clauses?",
     "What royalty or fee structures are defined?",
@@ -14,6 +16,76 @@ EXAMPLES = [
     "What are the governing law and dispute resolution provisions?",
     "Are there non-compete or exclusivity restrictions?",
 ]
+
+
+def generate_example_questions(documents, max_questions=6):
+    """
+    Use the LLM to generate example questions relevant to the loaded documents.
+    Returns a list of strings, or fallback examples if generation fails.
+    """
+    if not documents:
+        return FALLBACK_EXAMPLES
+
+    # Build a compact summary of the first few documents (to save tokens)
+    summary_parts = []
+    for doc in documents[:3]:  # limit to first 3 docs
+        filename = doc.get("filename", "Unknown")
+        # Take first 500 chars of raw_text as a sample
+        text_sample = doc.get("raw_text", "")[:500].strip()
+        if text_sample:
+            summary_parts.append(f"Document: {filename}\nSample: {text_sample}")
+
+    if not summary_parts:
+        return FALLBACK_EXAMPLES
+
+    summary = "\n\n".join(summary_parts)
+
+    prompt = f"""Based on the following contract excerpts, generate {max_questions} insightful questions that a legal analyst might ask about these documents. The questions should cover key risks, obligations, and unusual clauses.
+
+Excerpts:
+{summary}
+
+Return only a numbered list of questions, nothing else. Each question should be a complete sentence."""
+
+    try:
+        # Use the currently configured LLM backend
+        backend_kwargs = st.session_state.get("backend_kwargs", {})
+        if not backend_kwargs:
+            return FALLBACK_EXAMPLES
+        llm = LLMBackend(**backend_kwargs)
+        result = llm.query(prompt, system_prompt="You are a helpful legal assistant generating example questions.")
+        if result.get("error"):
+            return FALLBACK_EXAMPLES
+        response = result.get("response", "")
+        # Parse numbered list
+        lines = response.strip().split("\n")
+        questions = []
+        for line in lines:
+            # Remove leading numbers, dots, dashes
+            line = line.strip()
+            if line and line[0].isdigit() and ". " in line:
+                q = line.split(". ", 1)[-1].strip()
+                questions.append(q)
+            elif line.startswith("- "):
+                questions.append(line[2:].strip())
+            elif line:
+                # fallback: take whole line if it looks like a question
+                if "?" in line:
+                    questions.append(line)
+        # Remove duplicates and limit
+        seen = set()
+        unique = []
+        for q in questions:
+            if q and q not in seen:
+                seen.add(q)
+                unique.append(q)
+                if len(unique) >= max_questions:
+                    break   
+        return unique if unique else FALLBACK_EXAMPLES
+    except Exception as e:
+        # Log error silently, return fallback
+        print(f"Question generation error: {e}")
+        return FALLBACK_EXAMPLES
 
 
 def render_tab_query():
@@ -28,9 +100,17 @@ def render_tab_query():
             unsafe_allow_html=True)
         return
 
+    # Generate example questions when documents are loaded (or if not yet generated)
+    if st.session_state.get("documents") and "example_questions" not in st.session_state:
+        with st.spinner("Generating example questions..."):
+            questions = generate_example_questions(st.session_state.documents)
+            st.session_state.example_questions = questions
+
+    # Display example questions
+    example_qs = st.session_state.get("example_questions", FALLBACK_EXAMPLES)
     with st.expander("💡 Example questions — click to populate"):
         ec = st.columns(2)
-        for i, eq in enumerate(EXAMPLES):
+        for i, eq in enumerate(example_qs[:6]):  # limit to 6
             with ec[i % 2]:
                 if st.button(eq, key=f"eq_{i}", use_container_width=True):
                     st.session_state.active_query = eq
@@ -44,10 +124,14 @@ def render_tab_query():
     )
     st.session_state.active_query = user_q
 
-    qc1, qc2 = st.columns([1, 5])
+    # ── Retrieve controls: number of chunks + neighbour window ─────────────────
+    qc1, qc2, qc3 = st.columns([1, 1, 4])
     with qc1:
         top_k = st.selectbox("Context chunks", [3, 5, 6, 8, 10], index=1)
     with qc2:
+        window = st.number_input("Neighbours", min_value=0, max_value=3, value=1, step=1,
+                                 help="Include this many chunks before and after each matched chunk")
+    with qc3:   
         st.markdown("<div style='padding-top:22px'></div>", unsafe_allow_html=True)
         submit_q = st.button("💬 Ask Question", type="primary")
 
@@ -59,9 +143,42 @@ def render_tab_query():
             st.error("Configure the AI backend in the sidebar.")
         else:
             with st.spinner("Retrieving context and generating answer…"):
-                relevant = simple_relevance_search(st.session_state.chunks, question, top_k)
-                prompt   = build_query_prompt(question, relevant)
-                result   = LLMBackend(**st.session_state.backend_kwargs).query(prompt)
+                # 1. Get top‑k relevant chunks using simple relevance
+                
+                relevant = bm25_search(question, top_k)
+
+                # 2. Expand each relevant chunk with its neighbours
+                expanded = []
+                # Group by document to keep order correct
+                by_doc = {}
+                for chunk in relevant:
+                    fname = chunk["filename"]
+                    if fname not in by_doc:
+                        by_doc[fname] = []
+                    by_doc[fname].append(chunk)
+
+                for fname, chunks_in_doc in by_doc.items():
+                    # Get all chunks of this document (they are already in order in session_state.chunks)
+                    all_doc_chunks = [c for c in st.session_state.chunks if c["filename"] == fname]
+                    # Build index → chunk map
+                    idx_map = {c["chunk_index"]: c for c in all_doc_chunks}
+                    # Indices of relevant chunks
+                    rel_indices = sorted({c["chunk_index"] for c in chunks_in_doc})
+                    # Expand with neighbours
+                    expanded_indices = set()
+                    for idx in rel_indices:
+                        for offset in range(-window, window + 1):
+                            neighbor = idx + offset
+                            if neighbor in idx_map:
+                                expanded_indices.add(neighbor)
+                    # Add to final list, preserving order
+                    for idx in sorted(expanded_indices):
+                        expanded.append(idx_map[idx])
+
+                # 3. Build prompt with expanded context (order preserved)
+                prompt = build_query_prompt(question, expanded)
+                result = LLMBackend(**st.session_state.backend_kwargs).query(prompt)
+
             if result.get("error"):
                 st.error(f"LLM Error: {result['error']}")
             else:
@@ -69,7 +186,7 @@ def render_tab_query():
                 st.session_state.query_history.append({
                     "question": question,
                     "response": result.get("response", ""),
-                    "chunks":   len(relevant),
+                    "chunks":   len(expanded),
                     "ts":       datetime.now().strftime("%H:%M"),
                 })
                 st.session_state.active_query = ""

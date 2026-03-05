@@ -21,6 +21,7 @@ BACKEND_LIST = [BACKEND_OLLAMA, BACKEND_MISTRAL, BACKEND_ANTHROPIC, BACKEND_CUST
 # the change automatically with no other files to touch.
 BACKEND_MODELS: Dict[str, list] = {
     BACKEND_OLLAMA: [
+        "gemma3:1b",
         "llama3",
         "llama3.1",
         "llama3.2",

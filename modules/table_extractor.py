@@ -317,7 +317,8 @@ def table_to_text(table: Dict, max_rows: int = 50) -> str:
     n_rows  = len(df)
 
     lines = [
-        f"TABLE from {fname} ({source})",
+        "--- BEGIN TABLE ---",
+        f"Source: {fname} ({source})",
         f"Columns ({len(cols)}): {', '.join(str(c) for c in cols)}",
         f"Rows: {n_rows}",
         "---",
@@ -328,6 +329,7 @@ def table_to_text(table: Dict, max_rows: int = 50) -> str:
         lines.append(row_str)
     if n_rows > max_rows:
         lines.append(f"... ({n_rows - max_rows} more rows not shown)")
+    lines.append("--- END TABLE ---")
     return "\n".join(lines)
 
 

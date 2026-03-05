@@ -14,15 +14,23 @@ _CREDENTIALS = {
 }
 
 # ── Tab registry ──────────────────────────────────────────────────────────────
+# ALL_TABS = [
+#     {"key": "analysis",  "label": "⚖ Risk Analysis",   "default": True,  "admin_only": False},
+#     {"key": "search",    "label": "🔍 Document Search", "default": True,  "admin_only": False},
+#     {"key": "query",     "label": "💬 LLM Query",       "default": True,  "admin_only": False},
+#     {"key": "viewer",    "label": "📄 Document Viewer", "default": True,  "admin_only": False},
+#     {"key": "dashboard", "label": "📊 Analytics",       "default": True,  "admin_only": False},
+#     {"key": "reports",   "label": "📑 Export Reports",  "default": True,  "admin_only": False},
+#     {"key": "tables",    "label": "📋 Tables",          "default": True,  "admin_only": False},
+#     {"key": "debug",     "label": "🛠 Debug",           "default": False, "admin_only": True},
+# ]
+
 ALL_TABS = [
-    {"key": "analysis",  "label": "⚖ Risk Analysis",   "default": True,  "admin_only": False},
+    
     {"key": "search",    "label": "🔍 Document Search", "default": True,  "admin_only": False},
     {"key": "query",     "label": "💬 LLM Query",       "default": True,  "admin_only": False},
     {"key": "viewer",    "label": "📄 Document Viewer", "default": True,  "admin_only": False},
-    {"key": "dashboard", "label": "📊 Analytics",       "default": True,  "admin_only": False},
-    {"key": "reports",   "label": "📑 Export Reports",  "default": True,  "admin_only": False},
     {"key": "tables",    "label": "📋 Tables",          "default": True,  "admin_only": False},
-    {"key": "debug",     "label": "🛠 Debug",           "default": False, "admin_only": True},
 ]
 
 # ── Backend / model options — imported from llm_backend.py (single source) ─────

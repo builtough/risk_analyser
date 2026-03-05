@@ -1,8 +1,9 @@
 """
 Document Viewer Tab
 - Full document with line numbers and risk highlights for text-based files
-- Excel: each sheet rendered as an interactive grid
-- DOCX/PPTX: tables rendered as inline grids exactly where they appear in the document
+- Excel: each sheet rendered as an interactive grid with table markers
+- DOCX/PPTX/PDF: tables rendered as inline grids exactly where they appear in the document,
+  with clear start/end markers
 """
 import io
 import streamlit as st
@@ -78,9 +79,8 @@ def render_tab_viewer():
     # ── Route to the right renderer ───────────────────────────────────────────
     if file_ext in ("xlsx", "xls"):
         _render_excel(rich_blocks, selected_doc)
-
-    elif file_ext in ("docx", "doc") and rich_blocks:
-        # Inline layout: findings panel alongside content
+    elif rich_blocks:
+        # Use rich renderer for any document with tables (PDF, DOCX, etc.)
         if has_findings:
             main_col, side_col = st.columns([3, 1])
         else:
@@ -95,13 +95,12 @@ def render_tab_viewer():
         )
 
         with main_col:
-            _render_docx_rich(rich_blocks, sv_kw, line_map, lines)
+            _render_rich_document(rich_blocks, sv_kw, line_map, lines)
         if side_col:
             with side_col:
                 _render_findings_panel(doc_findings)
-
     else:
-        # PDF and all other text-based formats — standard line viewer
+        # Fallback to plain text viewer (for documents without rich_blocks)
         sv_kw = st.text_input(
             "🔍 Highlight within document",
             placeholder="e.g. indemnify, renewal…",
@@ -133,7 +132,7 @@ def render_tab_viewer():
             with side_col:
                 _render_findings_panel(doc_findings)
 
-        # Page/Section view for PDFs
+        # Page/Section view for PDFs (fallback)
         pages = doc.get("pages", [])
         if pages and len(pages) > 1:
             with st.expander(f"📑 Page / Section View ({len(pages)} sections)"):
@@ -160,7 +159,7 @@ def render_tab_viewer():
 # ── Excel renderer ────────────────────────────────────────────────────────────
 
 def _render_excel(rich_blocks: list, filename: str):
-    """Render each Excel sheet as a full interactive grid."""
+    """Render each Excel sheet as a full interactive grid with table markers."""
     if not rich_blocks:
         st.info("No sheets found in this file.")
         return
@@ -168,17 +167,39 @@ def _render_excel(rich_blocks: list, filename: str):
     if len(rich_blocks) == 1:
         block = rich_blocks[0]
         df    = block["content"]
-        st.caption(f"Sheet: **{block.get('sheet', block.get('label', ''))}** "
-                   f"· {len(df)} rows × {len(df.columns)} columns")
-        _render_df_grid(df, key_prefix=f"excel_{filename}_0")
+        sheet_name = block.get('sheet', block.get('label', ''))
+        _render_table_with_markers(df, sheet_name, key_prefix=f"excel_{filename}_0")
     else:
         tabs = st.tabs([b.get("sheet", b.get("label", f"Sheet {i+1}"))
                         for i, b in enumerate(rich_blocks)])
         for i, (tab, block) in enumerate(zip(tabs, rich_blocks)):
             with tab:
                 df = block["content"]
-                st.caption(f"{len(df)} rows × {len(df.columns)} columns")
-                _render_df_grid(df, key_prefix=f"excel_{filename}_{i}")
+                sheet_name = block.get('sheet', block.get('label', f"Sheet {i+1}"))
+                _render_table_with_markers(df, sheet_name, key_prefix=f"excel_{filename}_{i}")
+
+
+def _render_table_with_markers(df: pd.DataFrame, label: str, key_prefix: str):
+    """Display a table with start/end markers and an interactive grid."""
+    # Start marker
+    st.markdown(
+        f'<div style="background:rgba(59,130,246,0.1); border-left:4px solid #3B82F6; '
+        f'padding:6px 12px; margin:12px 0 4px; border-radius:0 4px 4px 0;">'
+        f'📋 <strong>TABLE START</strong> · {html_escape(label)}</div>',
+        unsafe_allow_html=True
+    )
+
+    # The table itself
+    _render_df_grid(df, key_prefix)
+
+    # End marker
+    st.markdown(
+        f'<div style="background:rgba(0,0,0,0.03); border-left:4px solid #94A3B8; '
+        f'padding:4px 12px; margin:4px 0 16px; border-radius:0 4px 4px 0; '
+        f'font-size:11px; color:#64748B;">'
+        f'━━━ TABLE END ━━━</div>',
+        unsafe_allow_html=True
+    )
 
 
 def _render_df_grid(df: pd.DataFrame, key_prefix: str = ""):
@@ -213,12 +234,12 @@ def _render_df_grid(df: pd.DataFrame, key_prefix: str = ""):
     )
 
 
-# ── DOCX rich renderer ────────────────────────────────────────────────────────
+# ── Rich document renderer (for PDF, DOCX, etc. with rich_blocks) ─────────────
 
-def _render_docx_rich(rich_blocks: list, sv_kw: str, line_map: dict, all_lines: list):
+def _render_rich_document(rich_blocks: list, sv_kw: str, line_map: dict, all_lines: list):
     """
     Walk rich_blocks in order. Text blocks render as highlighted line viewer.
-    Table blocks render as full interactive grids with a visual separator.
+    Table blocks render as full interactive grids with clear start/end markers.
     """
     kws           = [sv_kw.strip()] if sv_kw.strip() else []
     line_cursor   = 1   # track absolute line number across text blocks
@@ -259,18 +280,28 @@ def _render_docx_rich(rich_blocks: list, sv_kw: str, line_map: dict, all_lines: 
             df    = block.get("content")
             label = block.get("label", f"Table {table_counter + 1}")
             if df is not None and not df.empty:
+                # Start marker
                 st.markdown(
-                    f'<div style="margin:14px 0 4px;padding:6px 12px;'
-                    f'background:rgba(59,130,246,0.08);border-left:3px solid #3B82F6;'
-                    f'border-radius:0 6px 6px 0;font-size:12px;font-weight:600;'
-                    f'color:#1E3A5F;">📋 {html_escape(label)} '
-                    f'· {len(df)} rows × {len(df.columns)} cols</div>',
-                    unsafe_allow_html=True,
+                    f'<div style="background:rgba(16,185,129,0.1); border-left:4px solid #10B981; '
+                    f'padding:6px 12px; margin:16px 0 4px; border-radius:0 4px 4px 0;">'
+                    f'📋 <strong>TABLE START</strong> · {html_escape(label)}</div>',
+                    unsafe_allow_html=True
                 )
-                _render_df_grid(df, key_prefix=f"docx_tbl_{table_counter}")
+
+                # Table grid
+                _render_df_grid(df, key_prefix=f"rich_tbl_{table_counter}")
+
+                # End marker
+                st.markdown(
+                    f'<div style="background:rgba(0,0,0,0.03); border-left:4px solid #94A3B8; '
+                    f'padding:4px 12px; margin:4px 0 16px; border-radius:0 4px 4px 0; '
+                    f'font-size:11px; color:#64748B;">'
+                    f'━━━ TABLE END ━━━</div>',
+                    unsafe_allow_html=True
+                )
                 table_counter += 1
 
-    # Legend
+    # Legend for risk highlights (if any)
     if line_map:
         st.markdown(
             '**Legend:** '
@@ -284,7 +315,7 @@ def _render_docx_rich(rich_blocks: list, sv_kw: str, line_map: dict, all_lines: 
         )
 
 
-# ── Standard text viewer (PDF, CSV, etc.) ─────────────────────────────────────
+# ── Standard text viewer (fallback) ───────────────────────────────────────────
 
 def _render_full_document(lines: list, sv_kw: str, line_map: dict):
     kws           = [sv_kw.strip()] if sv_kw.strip() else []

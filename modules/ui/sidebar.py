@@ -127,6 +127,9 @@ def render_sidebar():
                     freq_data={}, analysis_done=False,
                     extracted_tables=tables,
                 )
+                # Build BM25 index for retrieval
+                from modules.search import build_bm25_index
+                build_bm25_index(all_chunks)
                 loaded = [d for d in docs if not d.get("error")]
                 failed = [d for d in docs if  d.get("error")]
                 n_tables = len(tables)

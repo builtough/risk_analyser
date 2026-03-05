@@ -2,10 +2,19 @@
 Search Module
 Keyword search with EXACT line numbers per match occurrence.
 Line number = chunk.start_line + (newlines before match position in chunk text).
+Also provides BM25 retrieval for better relevance in LLM queries.
 """
 
 import re
+import string
 from typing import List, Dict, Any
+
+# Try to import rank_bm25; if not available, BM25 functions will fall back gracefully
+try:
+    from rank_bm25 import BM25Okapi
+    BM25_AVAILABLE = True
+except ImportError:
+    BM25_AVAILABLE = False
 
 
 def keyword_search(chunks: List[Dict], keywords: List[str],
@@ -142,6 +151,9 @@ SOURCES USED: [list document names and line numbers referenced]"""
 
 
 def simple_relevance_search(chunks: List[Dict], query: str, top_k: int = 6) -> List[Dict]:
+    """
+    Fallback relevance search: count overlapping words between query and chunk text.
+    """
     query_terms = set(re.findall(r'\b\w{3,}\b', query.lower()))
     if not query_terms:
         return chunks[:top_k]
@@ -150,3 +162,62 @@ def simple_relevance_search(chunks: List[Dict], query: str, top_k: int = 6) -> L
     scored = [(s, c) for s, c in scored if s > 0]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for _, c in scored[:top_k]]
+
+
+# ── BM25 retrieval ──────────────────────────────────────────────────────────────
+
+def build_bm25_index(chunks):
+    """
+    Build a BM25 index from the chunk texts and store it in session state.
+    """
+    import streamlit as st
+
+    if not chunks:
+        return
+    if not BM25_AVAILABLE:
+        st.warning("rank-bm25 not installed. BM25 search unavailable. Falling back to simple relevance.")
+        return
+
+    # Simple tokenization: split on whitespace and remove punctuation
+    tokenized_corpus = []
+    translator = str.maketrans('', '', string.punctuation)
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        # Lowercase and remove punctuation
+        tokens = text.lower().translate(translator).split()
+        tokenized_corpus.append(tokens)
+
+    bm25 = BM25Okapi(tokenized_corpus)
+    st.session_state.bm25 = bm25
+    st.session_state.bm25_chunks = chunks
+
+
+def bm25_search(query, top_k=6):
+    """
+    Retrieve top_k chunks using BM25 index from session state.
+    If index not available, fall back to simple_relevance_search.
+    """
+    import streamlit as st
+    import string
+
+    if not BM25_AVAILABLE:
+        return simple_relevance_search(st.session_state.get("chunks", []), query, top_k)
+
+    if "bm25" not in st.session_state or "bm25_chunks" not in st.session_state:
+        # Fallback if index not built
+        return simple_relevance_search(st.session_state.get("chunks", []), query, top_k)
+
+    bm25 = st.session_state.bm25
+    chunks = st.session_state.bm25_chunks
+
+    # Tokenize query
+    translator = str.maketrans('', '', string.punctuation)
+    query_tokens = query.lower().translate(translator).split()
+
+    if not query_tokens:
+        return chunks[:top_k]
+
+    scores = bm25.get_scores(query_tokens)
+    # Get indices of top_k
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    return [chunks[i] for i in top_indices]
