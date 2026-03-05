@@ -118,19 +118,16 @@ def render_tab_tables():
             unsafe_allow_html=True,
         )
 
-        # Ensure each expander has a unique key based on filename and table index
+        # Render each table – the label includes dynamic parts, so expander keys are not needed.
         for idx, table in enumerate(file_tables):
             df     = table["df"]
             source = table.get("source", "")
             tname  = table.get("table_name", f"table_{idx}")
 
-            # Create a unique key for the expander to avoid conflicts
-            expander_key = f"table_expander_{filename}_{idx}_{_table_signature(df)[:8]}"
-
+            # Use a dynamic label that is likely unique; no 'key' parameter.
             with st.expander(
                 f"📋  {source}  ·  {table['row_count']} rows × {table['col_count']} cols",
                 expanded=True,
-                key=expander_key,
             ):
                 # Search + download controls
                 cc1, cc2 = st.columns([4, 1])
@@ -153,7 +150,7 @@ def render_tab_tables():
                         use_container_width=True,
                     )
 
-                # Apply search filter — all rows shown, no limit
+                # Apply search filter
                 display_df = df.copy()
                 if search_term.strip():
                     mask = display_df.astype(str).apply(
@@ -162,7 +159,7 @@ def render_tab_tables():
                     display_df = display_df[mask]
                     st.caption(f"{len(display_df)} of {len(df)} rows match")
 
-                # Full table — no row cap
+                # Full table
                 st.dataframe(
                     display_df,
                     use_container_width=True,
