@@ -1,4 +1,5 @@
 import re
+import hashlib
 """
 Tables Tab — displays all extracted tables from loaded documents.
 Tables are grouped by source file.
@@ -9,6 +10,12 @@ import streamlit as st
 import pandas as pd
 from collections import defaultdict
 from html import escape as html_escape
+
+
+def _table_signature(df: pd.DataFrame) -> str:
+    """Generate a hash signature from the first few rows to identify duplicates."""
+    sample = df.head(3).to_string(index=False)
+    return hashlib.md5(sample.encode()).hexdigest()
 
 
 def render_tab_tables():
@@ -37,6 +44,19 @@ def render_tab_tables():
                 unsafe_allow_html=True,
             )
         return
+
+    # ── Deduplicate tables within each file (by content signature) ─────────────
+    # Some documents may report the same table multiple times (e.g., PDF table extraction quirks).
+    # We'll keep only the first occurrence of each unique signature per file.
+    deduped_tables = []
+    seen_per_file = defaultdict(set)
+    for t in tables:
+        filename = t["filename"]
+        sig = _table_signature(t["df"])
+        if sig not in seen_per_file[filename]:
+            seen_per_file[filename].add(sig)
+            deduped_tables.append(t)
+    tables = deduped_tables
 
     # ── Summary strip ────────────────────────────────────────────────────────
     files_with_tables = len(set(t["filename"] for t in tables))
@@ -98,14 +118,19 @@ def render_tab_tables():
             unsafe_allow_html=True,
         )
 
+        # Ensure each expander has a unique key based on filename and table index
         for idx, table in enumerate(file_tables):
             df     = table["df"]
             source = table.get("source", "")
             tname  = table.get("table_name", f"table_{idx}")
 
+            # Create a unique key for the expander to avoid conflicts
+            expander_key = f"table_expander_{filename}_{idx}_{_table_signature(df)[:8]}"
+
             with st.expander(
                 f"📋  {source}  ·  {table['row_count']} rows × {table['col_count']} cols",
                 expanded=True,
+                key=expander_key,
             ):
                 # Search + download controls
                 cc1, cc2 = st.columns([4, 1])
@@ -157,7 +182,13 @@ def render_tab_tables():
                 for table in show_tables:
                     sheet = re.sub(r"[\\/*?:\[\]]", "_", table["source"])[:31]
                     # Ensure sheet names are unique
-                    table["df"].to_excel(writer, sheet_name=sheet or "Table", index=False)
+                    base_sheet = sheet or "Table"
+                    sheet_name = base_sheet
+                    counter = 1
+                    while sheet_name in writer.sheets:
+                        sheet_name = f"{base_sheet}_{counter}"
+                        counter += 1
+                    table["df"].to_excel(writer, sheet_name=sheet_name, index=False)
             st.download_button(
                 "⬇ Save Excel",
                 data=xl_buf.getvalue(),
