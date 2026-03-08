@@ -18,8 +18,8 @@ section[data-testid="stSidebar"]{border-right:3px solid #3B82F6}
          border-bottom:1px solid rgba(59,130,246,.25);margin-bottom:18px}
 .da-logo-icon{width:38px;height:38px;background:linear-gradient(135deg,#3B82F6,#0EA5E9);
               border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:20px}
-.da-logo h2{font-size:16px;font-weight:700;margin:0;line-height:1.2}
-.da-logo small{font-size:10px;opacity:.5;text-transform:uppercase;letter-spacing:1.5px}
+.da-logo h2{font-size:14px;font-weight:700;margin:0;line-height:1.2}
+.da-logo small{font-size:9px;opacity:.5;text-transform:uppercase;letter-spacing:1.5px}
 
 /* ── Header ── */
 .da-title{margin-bottom:28px;padding-bottom:16px;border-bottom:2px solid #3B82F6}
@@ -120,6 +120,24 @@ section[data-testid="stSidebar"]{border-right:3px solid #3B82F6}
               padding-left:4px;margin-left:-7px}
 .dv-hl-LOW   {background:rgba(34,197,94,.1);border-left:3px solid #22C55E;
               padding-left:4px;margin-left:-7px}
+
+/* ── Page navigation ── */
+.page-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;
+          background:rgba(59,130,246,.04);border-radius:8px;
+          border:1px solid rgba(59,130,246,.1)}
+.page-pill{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;
+           font-weight:600;cursor:pointer;border:1px solid rgba(59,130,246,.3);
+           color:#3B82F6;background:white}
+.page-pill-active{background:#3B82F6;color:white;border-color:#3B82F6}
+.page-pill-flagged{border-color:#EF4444;color:#EF4444}
+
+/* ── Table viewer ── */
+.tbl-marker-start{background:rgba(16,185,129,.1);border-left:4px solid #10B981;
+                  padding:5px 12px;margin:10px 0 4px;border-radius:0 4px 4px 0;
+                  font-size:12px;font-weight:600;color:#065F46}
+.tbl-marker-end{background:rgba(0,0,0,.03);border-left:4px solid #94A3B8;
+                padding:3px 12px;margin:2px 0 12px;border-radius:0 4px 4px 0;
+                font-size:11px;color:#64748B}
 
 /* ── Findings sidebar pills ── */
 .fpin{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;

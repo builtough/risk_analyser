@@ -12,23 +12,25 @@ from modules.table_extractor import batch_extract_tables, tables_to_chunks
 
 def render_sidebar():
     with st.sidebar:
-        # ── Logo ─────────────────────────────────────────────────────────────
+        # ── Logo / Branding ───────────────────────────────────────────────────
         st.markdown("""
         <div class="da-logo">
-            <div class="da-logo-icon">⚖</div>
-            <div><h2>DealAnalyzer</h2><small>Contract Intelligence</small></div>
+            <div class="da-logo-icon">🔬</div>
+            <div>
+                <h2>APEX</h2>
+            </div>
         </div>""", unsafe_allow_html=True)
 
         # ── File Upload ───────────────────────────────────────────────────────
         st.markdown("**📂 Upload Documents**")
         uploaded_files = st.file_uploader(
-            "PDF · Word · Excel", type=["pdf", "docx", "doc", "xlsx", "xls"],
-            accept_multiple_files=True, label_visibility="collapsed",
+            "PDF · Word · Excel",
+            type=["pdf", "docx", "doc", "xlsx", "xls"],
+            accept_multiple_files=True,
+            label_visibility="collapsed",
         )
 
         # ── AI Backend ────────────────────────────────────────────────────────
-        # When admin has locked the backend, hide the selector and inject
-        # the locked kwargs silently. Show only a read-only info line.
         llm_restricted = st.session_state.get("llm_restricted", False)
         model_name = ""
 
@@ -46,28 +48,24 @@ def render_sidebar():
         else:
             st.markdown("**🤖 AI Backend**")
             backend_type = st.selectbox(
-                "Backend",
-                BACKEND_LIST,
-                label_visibility="collapsed",
+                "Backend", BACKEND_LIST, label_visibility="collapsed",
             )
             bkw = {"backend_type": backend_type}
 
             if backend_type == BACKEND_OLLAMA:
+                # ollama_url_default = "http://host.docker.internal:11434"  # docker variant
                 bkw["ollama_url"]   = st.text_input("Ollama URL", "http://localhost:11434")
-                bkw["ollama_model"] = st.selectbox(
-                    "Model", BACKEND_MODELS[BACKEND_OLLAMA])
+                bkw["ollama_model"] = st.selectbox("Model", BACKEND_MODELS[BACKEND_OLLAMA])
                 model_name = bkw["ollama_model"]
 
             elif backend_type == BACKEND_MISTRAL:
                 bkw["mistral_api_key"] = st.text_input("API Key", type="password")
-                bkw["mistral_model"] = st.selectbox(
-                    "Model", BACKEND_MODELS[BACKEND_MISTRAL])
+                bkw["mistral_model"]   = st.selectbox("Model", BACKEND_MODELS[BACKEND_MISTRAL])
                 model_name = bkw["mistral_model"]
 
             elif backend_type == BACKEND_ANTHROPIC:
                 bkw["anthropic_api_key"] = st.text_input("API Key", type="password")
-                bkw["anthropic_model"] = st.selectbox(
-                    "Model", BACKEND_MODELS[BACKEND_ANTHROPIC])
+                bkw["anthropic_model"]   = st.selectbox("Model", BACKEND_MODELS[BACKEND_ANTHROPIC])
                 model_name = bkw["anthropic_model"]
 
             elif backend_type == BACKEND_CUSTOM:
@@ -76,6 +74,7 @@ def render_sidebar():
                 bkw["custom_model"]   = st.text_input("Model ID")
                 model_name = bkw.get("custom_model", "")
 
+            # temperature: float = 0.1   # more deterministic for small models
             bkw["temperature"] = 0.2
             st.session_state.backend_kwargs = bkw
 
@@ -88,6 +87,7 @@ def render_sidebar():
         auto_params = auto_chunk_params(backend_for_params, model_name)
 
         st.markdown("**⚙ Document Chunking**")
+        # chunk_mode_default = "✏ Manual"   # uncomment to default to manual mode
         chunk_mode = st.radio(
             "Mode", ["🤖 Auto (Intelligent)", "✏ Manual"],
             horizontal=True, label_visibility="collapsed",
@@ -101,7 +101,7 @@ def render_sidebar():
         else:
             cs = st.slider("Chunk Size (chars)", 200, 2000, auto_params["chunk_size"], 50)
             ov = st.slider("Overlap (chars)",      0,  400, auto_params["overlap"],     25)
-            mt = st.select_slider("Max Response Tokens", [512,1024,2048,3072,4096],
+            mt = st.select_slider("Max Response Tokens", [512, 1024, 2048, 3072, 4096],
                                   value=auto_params["max_tokens"])
             final_params = {"chunk_size": cs, "overlap": ov, "max_tokens": mt}
             st.session_state.backend_kwargs["max_tokens"] = mt
@@ -117,19 +117,25 @@ def render_sidebar():
                         docs, final_params["chunk_size"], final_params["overlap"]
                     )
                 with st.spinner("Extracting tables…"):
-                    tables = batch_extract_tables(uploaded_files)
+                    tables       = batch_extract_tables(uploaded_files)
                     table_chunks = tables_to_chunks(tables)
-                    # Merge table chunks into main chunk list so search/analysis/RAG all see them
-                    all_chunks = chunks + table_chunks
+                    all_chunks   = chunks + table_chunks
+
                 st.session_state.update(
-                    documents=docs, chunks=all_chunks,
-                    findings=[], score_summary={}, search_results=[],
-                    freq_data={}, analysis_done=False,
+                    documents=docs,
+                    chunks=all_chunks,
+                    findings=[],
+                    score_summary={},
+                    search_results=[],
+                    freq_data={},
+                    analysis_done=False,
                     extracted_tables=tables,
+                    example_questions=None,   # reset so new questions are generated
                 )
                 # Build BM25 index for retrieval
                 from modules.search import build_bm25_index
                 build_bm25_index(all_chunks)
+
                 loaded = [d for d in docs if not d.get("error")]
                 failed = [d for d in docs if  d.get("error")]
                 n_tables = len(tables)
@@ -142,7 +148,8 @@ def render_sidebar():
         st.divider()
         st.markdown("**Project / Matter**")
         st.session_state.company_name = st.text_input(
-            "Company", value=st.session_state.get("company_name", ""),
+            "Company",
+            value=st.session_state.get("company_name", ""),
             placeholder="e.g. Acme Corp — Series B",
             label_visibility="collapsed",
         )
@@ -153,6 +160,6 @@ def render_sidebar():
                 ok = LLMBackend(**st.session_state.backend_kwargs).test_connection()
             (st.success if ok else st.error)("✓ Connected" if ok else "Connection failed")
 
-        # ── Admin trigger — at the very bottom, after a divider ───────────────
+        # ── Admin trigger ─────────────────────────────────────────────────────
         st.divider()
         render_admin_trigger()

@@ -4,9 +4,10 @@ Run: streamlit run app.py
 """
 import streamlit as st
 
+
 st.set_page_config(
-    page_title="DealAnalyzer | Contract Intelligence",
-    page_icon="⚖️", layout="wide", initial_sidebar_state="expanded",
+    page_title="APEX",
+    page_icon="🌐", layout="wide", initial_sidebar_state="expanded",
 )
 
 from modules.ui.styles        import inject_styles
@@ -56,8 +57,8 @@ render_sidebar()
 # ── Page header ───────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="da-title">
-    <h1>Contract <em>Intelligence</em> Platform</h1>
-    <p>Risk detection · Clause analysis · Legal intelligence for multinational deal documentation</p>
+    <h1>🌐 <em>APEX</em> Document Intelligence</h1>
+   
 </div>""", unsafe_allow_html=True)
 
 if st.session_state.documents:
@@ -100,7 +101,6 @@ else:
             _RENDERERS[tab["key"]]()
 
 st.markdown(
-    '<div class="da-footer">DealAnalyzer — Contract Intelligence · '
-    'All AI analysis must be reviewed by qualified legal counsel.</div>',
+    '<div class="da-footer">- - -  APEX  - - -</div>',
     unsafe_allow_html=True,
 )

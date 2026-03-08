@@ -3,19 +3,26 @@ Search Module
 Keyword search with EXACT line numbers per match occurrence.
 Line number = chunk.start_line + (newlines before match position in chunk text).
 Also provides BM25 retrieval for better relevance in LLM queries.
+
+BUG FIXED: build_query_prompt_for_LLM_search had a typo "s    tart_line"
+           which silently returned "?" for every line reference.
 """
 
 import re
 import string
 from typing import List, Dict, Any
 
-# Try to import rank_bm25; if not available, BM25 functions will fall back gracefully
+# Prompts are now centralised in modules/prompts.py
+from modules.prompts import build_query_prompt as _build_query_prompt_base
+
 try:
     from rank_bm25 import BM25Okapi
     BM25_AVAILABLE = True
 except ImportError:
     BM25_AVAILABLE = False
 
+
+# ── Keyword search ────────────────────────────────────────────────────────────
 
 def keyword_search(chunks: List[Dict], keywords: List[str],
                    case_sensitive: bool = False) -> List[Dict[str, Any]]:
@@ -29,13 +36,13 @@ def keyword_search(chunks: List[Dict], keywords: List[str],
 
     for chunk in chunks:
         text       = chunk.get("text", "")
-        start_line = chunk.get("start_line", 1)   # absolute line where chunk begins
+        start_line = chunk.get("start_line", 1)
         filename   = chunk.get("filename", "")
 
         if not isinstance(start_line, int):
-            start_line = 1                         # fallback if not set
+            start_line = 1
 
-        matched_keywords = []
+        matched_keywords        = []
         all_match_snippets: List[Dict] = []
 
         for kw in keywords:
@@ -50,25 +57,19 @@ def keyword_search(chunks: List[Dict], keywords: List[str],
 
             matched_keywords.append(kw)
 
-            # ── Per-match snippet with exact line number ──────────────────
-            kw_snippets = []
             for m in matches:
-                # Count newlines before match start to get line offset
                 lines_before = text[: m.start()].count("\n")
                 exact_line   = start_line + lines_before
 
-                # Extend context to full lines around the match
                 line_start = text.rfind("\n", 0, m.start())
                 line_start = 0 if line_start == -1 else line_start + 1
-                # Walk forward up to 4 lines for context
-                line_end = m.end()
+                line_end   = m.end()
                 newlines_found = 0
                 while line_end < len(text) and newlines_found < 3:
                     if text[line_end] == "\n":
                         newlines_found += 1
                     line_end += 1
 
-                # Also include 1 line before for context
                 pre_start = line_start
                 for _ in range(1):
                     pre_start = text.rfind("\n", 0, max(0, pre_start - 1))
@@ -76,22 +77,17 @@ def keyword_search(chunks: List[Dict], keywords: List[str],
 
                 snippet = text[pre_start:line_end].replace("\n", " ").strip()
 
-                kw_snippets.append({
+                all_match_snippets.append({
                     "keyword":    kw,
                     "exact_line": exact_line,
                     "snippet":    snippet,
                     "match_start": m.start(),
                 })
 
-            all_match_snippets.extend(kw_snippets)
-
         if not matched_keywords:
             continue
 
-        # Total occurrence count across all keywords
-        total_hits = len(all_match_snippets)
-
-        # Collect the sorted unique exact lines for display in the card header
+        total_hits       = len(all_match_snippets)
         exact_lines_sorted = sorted(set(s["exact_line"] for s in all_match_snippets))
 
         results.append({
@@ -99,10 +95,10 @@ def keyword_search(chunks: List[Dict], keywords: List[str],
             "filename":         filename,
             "chunk_start_line": start_line,
             "chunk_end_line":   chunk.get("end_line", start_line),
-            "exact_lines":      exact_lines_sorted,   # ← exact per-match lines
+            "exact_lines":      exact_lines_sorted,
             "chunk_index":      chunk.get("chunk_index", 0),
             "matched_keywords": matched_keywords,
-            "match_snippets":   all_match_snippets,   # ← per-match with exact_line
+            "match_snippets":   all_match_snippets,
             "total_hits":       total_hits,
             "relevance_score":  len(matched_keywords),
         })
@@ -125,35 +121,40 @@ def get_keyword_frequencies(chunks: List[Dict], keywords: List[str]) -> Dict[str
     return freq
 
 
+# ── Query prompts (delegate to prompts.py) ────────────────────────────────────
+
 def build_query_prompt(user_query: str, relevant_chunks: List[Dict],
-                       max_context_chars: int = 5000) -> str:
-    context_parts, total = [], 0
-    for chunk in relevant_chunks[:10]:
-        sl    = chunk.get("start_line", "?")
-        entry = f"[Source: {chunk.get('filename','')} · Line {sl}]\n{chunk.get('text','')}"
-        if total + len(entry) > max_context_chars:
-            break
-        context_parts.append(entry)
-        total += len(entry)
-    context = "\n\n---\n\n".join(context_parts)
-    return f"""You are an expert legal analyst helping interpret complex deal documentation.
+                       max_context_chars: int = 5000,
+                       model_name: str = "") -> str:
+    """Build a RAG query prompt. Delegates to modules/prompts.py."""
+    return _build_query_prompt_base(
+        user_query, relevant_chunks,
+        max_context_chars=max_context_chars,
+        model_name=model_name,
+    )
 
-Answer based on the following excerpts. Cite source documents and line numbers.
 
-DOCUMENT EXCERPTS:
-{context}
+# Alias kept for backwards compatibility with any existing callers
+def build_query_prompt_for_LLM_search(user_query: str, relevant_chunks: List[Dict],
+                                       max_context_chars: int = 5000,
+                                       model_name: str = "") -> str:
+    """
+    RAG prompt for the LLM Query tab.
+    BUG FIX: was using 'chunk.get("s    tart_line")' (typo with spaces) which
+    always fell back to "?" and broke source citation in every answer.
+    Now delegates to prompts.py which uses the correct "start_line" key.
+    """
+    return _build_query_prompt_base(
+        user_query, relevant_chunks,
+        max_context_chars=max_context_chars,
+        model_name=model_name,
+    )
 
-USER QUESTION:
-{user_query}
 
-Provide a thorough, legally-informed answer. End with:
-SOURCES USED: [list document names and line numbers referenced]"""
-
+# ── Simple fallback search ────────────────────────────────────────────────────
 
 def simple_relevance_search(chunks: List[Dict], query: str, top_k: int = 6) -> List[Dict]:
-    """
-    Fallback relevance search: count overlapping words between query and chunk text.
-    """
+    """Fallback relevance search: count overlapping words between query and chunk."""
     query_terms = set(re.findall(r'\b\w{3,}\b', query.lower()))
     if not query_terms:
         return chunks[:top_k]
@@ -164,60 +165,45 @@ def simple_relevance_search(chunks: List[Dict], query: str, top_k: int = 6) -> L
     return [c for _, c in scored[:top_k]]
 
 
-# ── BM25 retrieval ──────────────────────────────────────────────────────────────
+# ── BM25 retrieval ────────────────────────────────────────────────────────────
 
 def build_bm25_index(chunks):
-    """
-    Build a BM25 index from the chunk texts and store it in session state.
-    """
+    """Build a BM25 index from chunk texts and store it in session state."""
     import streamlit as st
 
     if not chunks:
         return
     if not BM25_AVAILABLE:
-        st.warning("rank-bm25 not installed. BM25 search unavailable. Falling back to simple relevance.")
+        st.warning("rank-bm25 not installed — falling back to simple relevance search. "
+                   "Install with: pip install rank-bm25")
         return
 
-    # Simple tokenization: split on whitespace and remove punctuation
-    tokenized_corpus = []
-    translator = str.maketrans('', '', string.punctuation)
-    for chunk in chunks:
-        text = chunk.get("text", "")
-        # Lowercase and remove punctuation
-        tokens = text.lower().translate(translator).split()
-        tokenized_corpus.append(tokens)
-
-    bm25 = BM25Okapi(tokenized_corpus)
-    st.session_state.bm25 = bm25
+    translator       = str.maketrans('', '', string.punctuation)
+    tokenized_corpus = [
+        chunk.get("text", "").lower().translate(translator).split()
+        for chunk in chunks
+    ]
+    st.session_state.bm25        = BM25Okapi(tokenized_corpus)
     st.session_state.bm25_chunks = chunks
 
 
-def bm25_search(query, top_k=6):
+def bm25_search(query: str, top_k: int = 6) -> List[Dict]:
     """
     Retrieve top_k chunks using BM25 index from session state.
-    If index not available, fall back to simple_relevance_search.
+    Falls back to simple_relevance_search when index is unavailable.
     """
     import streamlit as st
-    import string
 
-    if not BM25_AVAILABLE:
+    if not BM25_AVAILABLE or "bm25" not in st.session_state:
         return simple_relevance_search(st.session_state.get("chunks", []), query, top_k)
 
-    if "bm25" not in st.session_state or "bm25_chunks" not in st.session_state:
-        # Fallback if index not built
-        return simple_relevance_search(st.session_state.get("chunks", []), query, top_k)
-
-    bm25 = st.session_state.bm25
-    chunks = st.session_state.bm25_chunks
-
-    # Tokenize query
-    translator = str.maketrans('', '', string.punctuation)
+    chunks      = st.session_state.bm25_chunks
+    translator  = str.maketrans('', '', string.punctuation)
     query_tokens = query.lower().translate(translator).split()
 
     if not query_tokens:
         return chunks[:top_k]
 
-    scores = bm25.get_scores(query_tokens)
-    # Get indices of top_k
+    scores      = st.session_state.bm25.get_scores(query_tokens)
     top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
     return [chunks[i] for i in top_indices]

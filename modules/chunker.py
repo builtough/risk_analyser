@@ -1,25 +1,26 @@
 """
 Chunker Module — line-number tracking + intelligent auto-param selection.
+
+BUG FIXED: chunk_all_documents was defined twice; the second (simpler) definition
+silently overwrote the first (smarter rich_blocks-aware one). Now only one
+definition exists and it handles both cases correctly.
 """
 from typing import List, Dict, Any
-import re
 
-# In chunker.py, add imports (place at top or inside function to avoid circular)
-# (No new imports needed yet; we'll import table_to_text locally)
 
-def chunk_document_preserve_structure(doc: Dict, chunk_size: int = 700, overlap: int = 120) -> List[Dict]:
+def chunk_document_preserve_structure(doc: Dict, chunk_size: int = 700,
+                                       overlap: int = 120) -> List[Dict]:
     """
     Create chunks that preserve the original order of text and table blocks.
+    Falls back to plain line-based chunking when no rich_blocks are present.
     """
-    # Import here to avoid circular dependency
     from modules.table_extractor import table_to_text
 
     rich_blocks = doc.get("rich_blocks", [])
     if not rich_blocks:
-        # Fallback to old line-based chunking
         return chunk_document(doc, chunk_size, overlap)
 
-    chunks = []
+    chunks      = []
     chunk_index = 0
     cumulative_lines = 0   # absolute line count across all blocks
 
@@ -29,56 +30,55 @@ def chunk_document_preserve_structure(doc: Dict, chunk_size: int = 700, overlap:
             if not text.strip():
                 continue
             lines = text.split("\n")
-            # Reuse line-chunking logic with absolute line offset
-            current = []
-            cur_chars = 0
-            start_line_offset = 0
+            current, cur_chars, start_line_offset = [], 0, 0
+
             for line_num, line in enumerate(lines, start=1):
                 ll = len(line) + 1
                 if cur_chars + ll > chunk_size and current:
                     txt = "\n".join(current).strip()
                     if txt:
-                        start_abs = cumulative_lines + start_line_offset
-                        end_abs = cumulative_lines + start_line_offset + len(current) - 1
-                        chunks.append(_make_chunk(txt, doc["filename"], chunk_index, start_abs, end_abs))
+                        s = cumulative_lines + start_line_offset
+                        e = cumulative_lines + start_line_offset + len(current) - 1
+                        chunks.append(_make_chunk(txt, doc["filename"], chunk_index, s, e))
                         chunk_index += 1
-                    # overlap: keep tail lines
+                    # Overlap: keep tail lines
                     ov_lines, ov_chars = [], 0
-                    for l in reversed(current):
-                        if ov_chars + len(l) + 1 <= overlap:
-                            ov_lines.insert(0, l)
-                            ov_chars += len(l) + 1
+                    for lv in reversed(current):
+                        if ov_chars + len(lv) + 1 <= overlap:
+                            ov_lines.insert(0, lv)
+                            ov_chars += len(lv) + 1
                         else:
                             break
-                    current = ov_lines + [line]
-                    cur_chars = sum(len(l) + 1 for l in current)
+                    current          = ov_lines + [line]
+                    cur_chars        = sum(len(lv) + 1 for lv in current)
                     start_line_offset = line_num - len(ov_lines)
                 else:
                     if not current:
                         start_line_offset = line_num
                     current.append(line)
                     cur_chars += ll
-            # End of block: flush remaining
+
+            # Flush remaining text in this block
             if current:
                 txt = "\n".join(current).strip()
                 if txt:
-                    start_abs = cumulative_lines + start_line_offset
-                    end_abs = cumulative_lines + start_line_offset + len(current) - 1
-                    chunks.append(_make_chunk(txt, doc["filename"], chunk_index, start_abs, end_abs))
+                    s = cumulative_lines + start_line_offset
+                    e = cumulative_lines + start_line_offset + len(current) - 1
+                    chunks.append(_make_chunk(txt, doc["filename"], chunk_index, s, e))
                     chunk_index += 1
             cumulative_lines += len(lines)
 
         elif block["type"] == "table":
-            # Table becomes one chunk
-            table_text = table_to_text(block)
-            start_abs = cumulative_lines + 1
-            end_abs = start_abs   # table occupies a single line in the raw line count
+            # rich_blocks store DataFrame as "content"; table_to_text expects "df"
+            tbl_arg    = {**block, "df": block["content"]} if "df" not in block else block
+            table_text = table_to_text(tbl_arg)
+            start_abs  = cumulative_lines + 1
             chunks.append({
                 "chunk_id":    f"{doc['filename']}::table_{chunk_index}",
                 "filename":    doc["filename"],
                 "chunk_index": chunk_index,
                 "start_line":  start_abs,
-                "end_line":    end_abs,
+                "end_line":    start_abs,
                 "text":        table_text,
                 "char_count":  len(table_text),
                 "word_count":  len(table_text.split()),
@@ -86,27 +86,15 @@ def chunk_document_preserve_structure(doc: Dict, chunk_size: int = 700, overlap:
                 "table_name":  block.get("label", ""),
                 "source":      block.get("source", ""),
             })
-            chunk_index += 1
-            cumulative_lines += 1   # one "line" for the table representation
+            chunk_index      += 1
+            cumulative_lines += 1
 
     return chunks
 
 
-# Modify chunk_all_documents to use the new function when rich_blocks exist
-def chunk_all_documents(documents: List[Dict], chunk_size=700, overlap=120):
-    all_chunks = []
-    for doc in documents:
-        if not doc.get("error"):
-            if doc.get("rich_blocks"):
-                chunks = chunk_document_preserve_structure(doc, chunk_size, overlap)
-            else:
-                chunks = chunk_document(doc, chunk_size, overlap)
-            all_chunks.extend(chunks)
-    return all_chunks
-
-
 def chunk_document(doc: Dict[str, Any], chunk_size: int = 700,
                    overlap: int = 120) -> List[Dict[str, Any]]:
+    """Plain line-based chunking — used as fallback when no rich_blocks exist."""
     text     = doc.get("raw_text", "")
     filename = doc.get("filename", "unknown")
     if not text.strip():
@@ -115,27 +103,49 @@ def chunk_document(doc: Dict[str, Any], chunk_size: int = 700,
     return _chunk_by_lines(lines, filename, chunk_size, overlap)
 
 
+def chunk_all_documents(documents: List[Dict], chunk_size: int = 700,
+                         overlap: int = 120) -> List[Dict]:
+    """
+    Chunk all documents.  Uses structure-aware chunking when rich_blocks
+    are present (PDF, DOCX), plain line chunking otherwise.
+
+    NOTE: This is the ONLY definition of chunk_all_documents — the old code
+    had a duplicate that silently discarded the rich_blocks logic.
+    """
+    all_chunks = []
+    for doc in documents:
+        if doc.get("error"):
+            continue
+        if doc.get("rich_blocks"):
+            chunks = chunk_document_preserve_structure(doc, chunk_size, overlap)
+        else:
+            chunks = chunk_document(doc, chunk_size, overlap)
+        all_chunks.extend(chunks)
+    return all_chunks
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
 def _chunk_by_lines(lines, filename, chunk_size, overlap):
-    chunks, idx = [], 0
+    chunks, idx       = [], 0
     current, cur_chars, start_line = [], 0, 1
 
     for line_num, line in enumerate(lines, start=1):
         ll = len(line) + 1
         if cur_chars + ll > chunk_size and current:
-            txt = "\n".join(current).strip()
+            txt      = "\n".join(current).strip()
             end_line = start_line + len(current) - 1
             if txt:
                 chunks.append(_make_chunk(txt, filename, idx, start_line, end_line))
                 idx += 1
-            # overlap: keep tail lines
             ov_lines, ov_chars = [], 0
-            for l in reversed(current):
-                if ov_chars + len(l) + 1 <= overlap:
-                    ov_lines.insert(0, l); ov_chars += len(l) + 1
+            for lv in reversed(current):
+                if ov_chars + len(lv) + 1 <= overlap:
+                    ov_lines.insert(0, lv); ov_chars += len(lv) + 1
                 else:
                     break
-            current   = ov_lines + [line]
-            cur_chars = sum(len(l) + 1 for l in current)
+            current    = ov_lines + [line]
+            cur_chars  = sum(len(lv) + 1 for lv in current)
             start_line = max(1, line_num - len(ov_lines))
         else:
             if not current:
@@ -148,14 +158,6 @@ def _chunk_by_lines(lines, filename, chunk_size, overlap):
             end_line = start_line + len(current) - 1
             chunks.append(_make_chunk(txt, filename, idx, start_line, end_line))
     return chunks
-
-
-def chunk_all_documents(documents: List[Dict], chunk_size=700, overlap=120):
-    all_chunks = []
-    for doc in documents:
-        if not doc.get("error"):
-            all_chunks.extend(chunk_document(doc, chunk_size, overlap))
-    return all_chunks
 
 
 def _make_chunk(text, filename, idx, start_line, end_line):
@@ -176,19 +178,32 @@ def auto_chunk_params(backend_type: str = "", model_name: str = "") -> dict:
     Intelligently select chunk_size / overlap / max_tokens based on model.
     Used when the user selects 'Auto' chunking mode.
     """
-    n = model_name.lower()
-    if any(x in n for x in ["opus", "large", "gpt-4", "70b", "72b", "34b"]):
+    n = (model_name or "").lower()
+
+    # Large / cloud models — big context windows
+    # return {"chunk_size": 1800, "overlap": 280, "max_tokens": 4096, ...}  # extra-large variant
+    if any(x in n for x in ["opus", "large", "gpt-4", "70b", "72b", "34b",
+                             "sonnet", "claude-3", "mistral-large", "mixtral"]):
         return {"chunk_size": 1400, "overlap": 220, "max_tokens": 4096,
-                "label": "Large model — 1400c chunks · 220c overlap · 4096 tokens"}
-    elif any(x in n for x in ["sonnet", "medium", "mixtral", "mistral-large", "13b"]):
+                "label": "Large model — 1400c · 220c overlap · 4096 tokens"}
+
+    # Medium models
+    # return {"chunk_size": 800, "overlap": 130, "max_tokens": 2048, ...}  # conservative variant
+    elif any(x in n for x in ["medium", "13b", "codestral"]):
         return {"chunk_size": 1000, "overlap": 160, "max_tokens": 3072,
-                "label": "Mid model — 1000c chunks · 160c overlap · 3072 tokens"}
-    elif any(x in n for x in ["haiku", "small", "phi", "mini", "7b", "3b"]):
-        return {"chunk_size": 600,  "overlap": 100, "max_tokens": 1024,
-                "label": "Small model — 600c chunks · 100c overlap · 1024 tokens"}
-    elif "ollama" in backend_type.lower():
-        return {"chunk_size": 800,  "overlap": 130, "max_tokens": 2048,
-                "label": "Ollama default — 800c chunks · 130c overlap · 2048 tokens"}
-    else:
-        return {"chunk_size": 900,  "overlap": 150, "max_tokens": 2048,
-                "label": "Default — 900c chunks · 150c overlap · 2048 tokens"}
+                "label": "Mid model — 1000c · 160c overlap · 3072 tokens"}
+
+    # Small / local models — tight context windows
+    # return {"chunk_size": 400, "overlap": 60, "max_tokens": 512, ...}  # very small variant
+    elif any(x in n for x in ["haiku", "phi", "mini", "gemma", "1b", "2b", "3b", "4b",
+                               "7b", "llama2", "llama3.2", "orca", "tiny"]):
+        return {"chunk_size": 600, "overlap": 80, "max_tokens": 1024,
+                "label": "Small model — 600c · 80c overlap · 1024 tokens"}
+
+    elif "ollama" in (backend_type or "").lower():
+        return {"chunk_size": 700, "overlap": 110, "max_tokens": 2048,
+                "label": "Ollama — 700c · 110c overlap · 2048 tokens"}
+
+    # Default
+    return {"chunk_size": 900, "overlap": 150, "max_tokens": 2048,
+            "label": "Default — 900c · 150c overlap · 2048 tokens"}

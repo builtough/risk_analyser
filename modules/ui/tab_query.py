@@ -1,13 +1,24 @@
-"""LLM Query Tab — RAG-powered natural language Q&A over contracts."""
+"""
+LLM Query Tab — RAG-powered natural language Q&A over documents.
+
+Changes:
+ • Uses prompts.py for all prompt construction (Excel-aware variant included)
+ • Example questions now use prompts.py for generation
+ • model_name passed through so small-model tier is respected
+ • BM25 search + neighbour window context expansion preserved
+"""
 import streamlit as st
 from html import escape as html_escape
 from datetime import datetime
 
 from modules.llm_backend import LLMBackend
-from modules.search import build_query_prompt, simple_relevance_search
-from modules.search import bm25_search
+from modules.search import bm25_search, build_query_prompt_for_LLM_search
+from modules.prompts import (
+    build_example_questions_prompt,
+    get_system_prompt,
+)
 
-# Fallback examples if generation fails or no LLM is configured
+# Fallback questions shown when LLM generation fails or no backend is configured
 FALLBACK_EXAMPLES = [
     "What are the termination rights of each party?",
     "Are there any automatic renewal or evergreen clauses?",
@@ -17,76 +28,97 @@ FALLBACK_EXAMPLES = [
     "Are there non-compete or exclusivity restrictions?",
 ]
 
+# Excel / table specific fallbacks
+FALLBACK_EXAMPLES_TABLE = [
+    "What columns are present in the spreadsheet?",
+    "What is the total or sum of the main numeric column?",
+    "Are there any rows with missing or unusual values?",
+    "What date range does the data cover?",
+    "What are the top 5 entries by value?",
+    "Summarise the key data points in the table.",
+]
 
-def generate_example_questions(documents, max_questions=6):
+
+def _is_primarily_tabular(documents) -> bool:
+    """Return True if most loaded documents are Excel/CSV files."""
+    if not documents:
+        return False
+    tabular_count = sum(
+        1 for d in documents
+        if d.get("type", "").lower() in ("xlsx", "xls", "csv")
+    )
+    return tabular_count > len(documents) / 2
+
+
+def generate_example_questions(documents, llm: LLMBackend, max_questions: int = 4):
     """
     Use the LLM to generate example questions relevant to the loaded documents.
-    Returns a list of strings, or fallback examples if generation fails.
+    Falls back to static examples if generation fails.
     """
     if not documents:
-        return FALLBACK_EXAMPLES
+        return FALLBACK_EXAMPLES_TABLE if _is_primarily_tabular(documents) else FALLBACK_EXAMPLES
 
-    # Build a compact summary of the first few documents (to save tokens)
-    summary_parts = []
-    for doc in documents[:3]:  # limit to first 3 docs
-        filename = doc.get("filename", "Unknown")
-        # Take first 500 chars of raw_text as a sample
-        text_sample = doc.get("raw_text", "")[:500].strip()
-        if text_sample:
-            summary_parts.append(f"Document: {filename}\nSample: {text_sample}")
+    # Build compact summaries — use first 600 chars of each doc (or table preview)
+    summaries = []
+    for doc in documents[:3]:
+        fname    = doc.get("filename", "Unknown")
+        # MAX_SAMPLE = 300   # tighter for very small models
+        MAX_SAMPLE = 600
+        sample   = doc.get("raw_text", "")[:MAX_SAMPLE].strip()
+        if sample:
+            summaries.append(f"File: {fname}\n{sample}")
 
-    if not summary_parts:
-        return FALLBACK_EXAMPLES
+    if not summaries:
+        return FALLBACK_EXAMPLES_TABLE if _is_primarily_tabular(documents) else FALLBACK_EXAMPLES
 
-    summary = "\n\n".join(summary_parts)
-
-    prompt = f"""Based on the following contract excerpts, generate {max_questions} insightful questions that a legal analyst might ask about these documents. The questions should cover key risks, obligations, and unusual clauses.
-
-Excerpts:
-{summary}
-
-Return only a numbered list of questions, nothing else. Each question should be a complete sentence."""
+    model_name = llm.active_model_name
+    prompt     = build_example_questions_prompt(summaries, n=max_questions,
+                                                 model_name=model_name)
+    sys_prompt = get_system_prompt("examples", model_name)
 
     try:
-        # Use the currently configured LLM backend
-        backend_kwargs = st.session_state.get("backend_kwargs", {})
-        if not backend_kwargs:
-            return FALLBACK_EXAMPLES
-        llm = LLMBackend(**backend_kwargs)
-        result = llm.query(prompt, system_prompt="You are a helpful legal assistant generating example questions.")
+        result = llm.query(prompt, system_prompt=sys_prompt)
         if result.get("error"):
             return FALLBACK_EXAMPLES
-        response = result.get("response", "")
-        # Parse numbered list
-        lines = response.strip().split("\n")
+
+        response  = result.get("response", "")
+        lines     = response.strip().split("\n")
         questions = []
         for line in lines:
-            # Remove leading numbers, dots, dashes
             line = line.strip()
-            if line and line[0].isdigit() and ". " in line:
+            if not line:
+                continue
+            # Strip leading number / bullet
+            if line[0].isdigit() and ". " in line:
                 q = line.split(". ", 1)[-1].strip()
+            elif line.startswith(("- ", "• ", "* ")):
+                q = line[2:].strip()
+            elif "?" in line:
+                q = line
+            else:
+                continue
+            if q:
                 questions.append(q)
-            elif line.startswith("- "):
-                questions.append(line[2:].strip())
-            elif line:
-                # fallback: take whole line if it looks like a question
-                if "?" in line:
-                    questions.append(line)
-        # Remove duplicates and limit
-        seen = set()
-        unique = []
+
+        # Deduplicate and limit
+        seen, unique = set(), []
         for q in questions:
-            if q and q not in seen:
+            if q not in seen:
                 seen.add(q)
                 unique.append(q)
                 if len(unique) >= max_questions:
-                    break   
+                    break
+
         return unique if unique else FALLBACK_EXAMPLES
+
     except Exception as e:
-        # Log error silently, return fallback
-        print(f"Question generation error: {e}")
+        print(f"[tab_query] Question generation error: {e}")
         return FALLBACK_EXAMPLES
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Main render function
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def render_tab_query():
     st.markdown('<div class="da-sec">💬 Natural Language Query · RAG-Powered</div>',
@@ -100,22 +132,42 @@ def render_tab_query():
             unsafe_allow_html=True)
         return
 
-    # Generate example questions when documents are loaded (or if not yet generated)
-    if st.session_state.get("documents") and "example_questions" not in st.session_state:
-        with st.spinner("Generating example questions..."):
-            questions = generate_example_questions(st.session_state.documents)
-            st.session_state.example_questions = questions
+    docs     = st.session_state.get("documents", [])
+    is_tabular = _is_primarily_tabular(docs)
 
-    # Display example questions
-    example_qs = st.session_state.get("example_questions", FALLBACK_EXAMPLES)
+    # ── Hint for tabular content ──────────────────────────────────────────────
+    if is_tabular:
+        st.markdown(
+            '<div class="info-strip">📊 <strong>Spreadsheet mode</strong> — '
+            'the query engine will use a table-aware prompt to read your Excel/CSV data. '
+            'Ask questions about column values, row counts, or specific data points.</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Generate example questions once per session load ─────────────────────
+    if docs and st.session_state.get("example_questions") is None:
+        if "backend_kwargs" in st.session_state:
+            with st.spinner("Generating example questions…"):
+                llm       = LLMBackend(**st.session_state.backend_kwargs)
+                questions = generate_example_questions(docs, llm)
+                st.session_state.example_questions = questions
+        else:
+            st.session_state.example_questions = (
+                FALLBACK_EXAMPLES_TABLE if is_tabular else FALLBACK_EXAMPLES
+            )
+
+    example_qs = st.session_state.get("example_questions",
+                                       FALLBACK_EXAMPLES_TABLE if is_tabular else FALLBACK_EXAMPLES)
+
     with st.expander("💡 Example questions — click to populate"):
         ec = st.columns(2)
-        for i, eq in enumerate(example_qs[:6]):  # limit to 6
+        for i, eq in enumerate(example_qs[:6]):
             with ec[i % 2]:
                 if st.button(eq, key=f"eq_{i}", use_container_width=True):
                     st.session_state.active_query = eq
                     st.rerun()
 
+    # ── Query input ───────────────────────────────────────────────────────────
     user_q = st.text_area(
         "Your question",
         value=st.session_state.get("active_query", ""),
@@ -124,74 +176,24 @@ def render_tab_query():
     )
     st.session_state.active_query = user_q
 
-    # ── Retrieve controls: number of chunks + neighbour window ─────────────────
+    # ── Retrieve controls ─────────────────────────────────────────────────────
     qc1, qc2, qc3 = st.columns([1, 1, 4])
     with qc1:
+        # top_k_default = 3   # use fewer chunks for small models
         top_k = st.selectbox("Context chunks", [3, 5, 6, 8, 10], index=1)
     with qc2:
-        window = st.number_input("Neighbours", min_value=0, max_value=3, value=1, step=1,
-                                 help="Include this many chunks before and after each matched chunk")
-    with qc3:   
+        window = st.number_input(
+            "Neighbours", min_value=0, max_value=3, value=1, step=1,
+            help="Include chunks before/after each matched chunk for context",
+        )
+    with qc3:
         st.markdown("<div style='padding-top:22px'></div>", unsafe_allow_html=True)
         submit_q = st.button("💬 Ask Question", type="primary")
 
     if submit_q:
-        question = st.session_state.active_query.strip()
-        if not question:
-            st.warning("Please type or select a question first.")
-        elif "backend_kwargs" not in st.session_state:
-            st.error("Configure the AI backend in the sidebar.")
-        else:
-            with st.spinner("Retrieving context and generating answer…"):
-                # 1. Get top‑k relevant chunks using simple relevance
-                
-                relevant = bm25_search(question, top_k)
+        _handle_query(user_q, top_k, window)
 
-                # 2. Expand each relevant chunk with its neighbours
-                expanded = []
-                # Group by document to keep order correct
-                by_doc = {}
-                for chunk in relevant:
-                    fname = chunk["filename"]
-                    if fname not in by_doc:
-                        by_doc[fname] = []
-                    by_doc[fname].append(chunk)
-
-                for fname, chunks_in_doc in by_doc.items():
-                    # Get all chunks of this document (they are already in order in session_state.chunks)
-                    all_doc_chunks = [c for c in st.session_state.chunks if c["filename"] == fname]
-                    # Build index → chunk map
-                    idx_map = {c["chunk_index"]: c for c in all_doc_chunks}
-                    # Indices of relevant chunks
-                    rel_indices = sorted({c["chunk_index"] for c in chunks_in_doc})
-                    # Expand with neighbours
-                    expanded_indices = set()
-                    for idx in rel_indices:
-                        for offset in range(-window, window + 1):
-                            neighbor = idx + offset
-                            if neighbor in idx_map:
-                                expanded_indices.add(neighbor)
-                    # Add to final list, preserving order
-                    for idx in sorted(expanded_indices):
-                        expanded.append(idx_map[idx])
-
-                # 3. Build prompt with expanded context (order preserved)
-                prompt = build_query_prompt(question, expanded)
-                result = LLMBackend(**st.session_state.backend_kwargs).query(prompt)
-
-            if result.get("error"):
-                st.error(f"LLM Error: {result['error']}")
-            else:
-                st.session_state.query_history = st.session_state.get("query_history", [])
-                st.session_state.query_history.append({
-                    "question": question,
-                    "response": result.get("response", ""),
-                    "chunks":   len(expanded),
-                    "ts":       datetime.now().strftime("%H:%M"),
-                })
-                st.session_state.active_query = ""
-                st.rerun()
-
+    # ── History ───────────────────────────────────────────────────────────────
     history = st.session_state.get("query_history", [])
     if history:
         st.markdown("---")
@@ -200,12 +202,90 @@ def render_tab_query():
                 f'<div class="q-bub">Q: {html_escape(item["question"])}</div>',
                 unsafe_allow_html=True)
             resp = html_escape(item["response"]).replace("\n", "<br>")
+            src_note = ""
+            if item.get("is_tabular"):
+                src_note = " · 📊 Spreadsheet data"
             st.markdown(
                 f'<div class="a-bub">'
-                f'<div class="a-lbl">⚖ AI Analysis · {item["ts"]} · {item["chunks"]} sections</div>'
+                f'<div class="a-lbl">🤖 AI Answer · {item["ts"]} · '
+                f'{item["chunks"]} sections{src_note}</div>'
                 f'{resp}</div>',
                 unsafe_allow_html=True)
             st.markdown("")
+
         if st.button("🗑 Clear History"):
             st.session_state.query_history = []
             st.rerun()
+
+
+def _handle_query(user_q: str, top_k: int, window: int):
+    """Run the RAG pipeline and store result in query_history."""
+    question = user_q.strip()
+    if not question:
+        st.warning("Please type or select a question first.")
+        return
+    if "backend_kwargs" not in st.session_state:
+        st.error("Configure the AI backend in the sidebar.")
+        return
+
+    with st.spinner("Retrieving context and generating answer…"):
+        # 1. BM25 retrieval
+        relevant = bm25_search(question, top_k)
+
+        # 2. Context window expansion (neighbour chunks)
+        expanded = _expand_with_neighbours(relevant, window)
+
+        # 3. Build prompt — passes model_name so Excel-aware / small-model
+        #    tiers are selected automatically in prompts.py
+        llm        = LLMBackend(**st.session_state.backend_kwargs)
+        model_name = llm.active_model_name
+        prompt     = build_query_prompt_for_LLM_search(
+            question, expanded, model_name=model_name
+        )
+        result     = llm.query_for_LLM_query(prompt)
+
+    is_tabular = any(c.get("is_table") or "BEGIN TABLE" in c.get("text", "")
+                     for c in expanded)
+
+    if result.get("error"):
+        st.error(f"LLM Error: {result['error']}")
+    else:
+        history = st.session_state.get("query_history", [])
+        history.append({
+            "question":   question,
+            "response":   result.get("response", ""),
+            "chunks":     len(expanded),
+            "ts":         datetime.now().strftime("%H:%M"),
+            "is_tabular": is_tabular,
+        })
+        st.session_state.query_history  = history
+        st.session_state.active_query   = ""
+        st.rerun()
+
+
+def _expand_with_neighbours(relevant_chunks: list, window: int) -> list:
+    """Add neighbouring chunks around each relevant chunk for richer context."""
+    all_chunks = st.session_state.get("chunks", [])
+
+    by_doc = {}
+    for chunk in relevant_chunks:
+        fname = chunk["filename"]
+        by_doc.setdefault(fname, []).append(chunk)
+
+    expanded = []
+    for fname, chunks_in_doc in by_doc.items():
+        all_doc   = [c for c in all_chunks if c["filename"] == fname]
+        idx_map   = {c["chunk_index"]: c for c in all_doc}
+        rel_idxs  = sorted({c["chunk_index"] for c in chunks_in_doc})
+
+        exp_idxs = set()
+        for idx in rel_idxs:
+            for offset in range(-window, window + 1):
+                nb = idx + offset
+                if nb in idx_map:
+                    exp_idxs.add(nb)
+
+        for idx in sorted(exp_idxs):
+            expanded.append(idx_map[idx])
+
+    return expanded

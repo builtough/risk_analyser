@@ -288,7 +288,8 @@ def _run_analysis(selected_cats: list):
                 f"lines {chunk.get('start_line','?')}–{chunk.get('end_line','?')} · "
                 f"{all_cats[category]['label']}"
             )
-            res = backend.query(build_analysis_prompt(chunk["text"], category, custom))
+            model_nm = getattr(backend, "active_model_name", "")
+            res = backend.query(build_analysis_prompt(chunk["text"], category, custom, model_nm))
             if res.get("error"):
                 st.warning(f"LLM error: {res['error']}")
             elif res.get("response"):
