@@ -38,11 +38,11 @@ BACKEND_MODELS: Dict[str, list] = {
         "llama2",
     ],
     BACKEND_MISTRAL: [
-        "mistral-small-latest",
+        # "mistral-small-latest",
         # "mistral-medium-latest",  # uncomment if you have access
-        "mistral-large-latest",
+        # "mistral-large-latest",
         "codestral-latest",
-        "open-mixtral-8x22b",
+        # "open-mixtral-8x22b",
     ],
     BACKEND_ANTHROPIC: [
         "claude-sonnet-4-20250514",
